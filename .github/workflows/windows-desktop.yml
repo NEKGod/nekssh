@@ -45,6 +45,10 @@ jobs:
         working-directory: desktop/frontend
         run: npm ci
 
+      - name: Build frontend assets
+        working-directory: desktop/frontend
+        run: npm run build
+
       - name: Test
         run: go test ./...
 
