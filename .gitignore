@@ -1,0 +1,16 @@
+# Build outputs
+/dist/
+/nekssh
+/desktop/build/bin/
+/desktop/frontend/dist/
+
+# Dependencies and generated files
+/desktop/frontend/node_modules/
+/desktop/frontend/wailsjs/
+
+# Local references and runtime data
+/references/
+*.log
+.DS_Store
+Thumbs.db
+

@@ -1,0 +1,32 @@
+name: nekssh
+arch: amd64
+platform: linux
+version: 0.1.0
+release: 1
+section: net
+priority: optional
+maintainer: NekSSH Project
+description: A lightweight web-based SSH and SFTP client.
+homepage: https://github.com/billchurch/webssh2
+license: MIT
+contents:
+  - src: ./dist/nekssh-linux-amd64
+    dst: /usr/bin/nekssh
+    file_info:
+      mode: 0755
+  - src: ./packaging/nekssh.service
+    dst: /usr/lib/systemd/system/nekssh.service
+    file_info:
+      mode: 0644
+  - src: ./packaging/nekssh.env
+    dst: /etc/nekssh/nekssh.env
+    type: config|noreplace
+    file_info:
+      mode: 0644
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  preremove: ./packaging/preremove.sh
+  postremove: ./packaging/postremove.sh
+rpm:
+  group: Applications/Internet
+  compression: gzip

@@ -1,0 +1,3 @@
+#hosts{margin-top:12px;display:flex;flex-direction:column;gap:4px;overflow:auto;max-height:calc(100vh - 150px)}
+.saved-host{display:flex;justify-content:space-between;align-items:center;gap:5px;padding:8px;border-radius:6px;cursor:pointer;color:#bec8d8}
+.saved-host:hover{background:#1a2230}.saved-host span:first-child{min-width:0}.saved-host b,.saved-host small{display:block;overflow:hidden;text-overflow:ellipsis}.saved-host small{margin-top:2px;color:#778397;font-size:10px}.saved-host button{padding:2px 5px;border:0;background:transparent;color:#778397}

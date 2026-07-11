@@ -1,0 +1,18 @@
+#workspace{flex-direction:column}
+#workspace #terminals{width:100%;min-height:0}
+#filePanel{width:100%;height:220px;flex:0 0 220px;border-left:0;border-top:1px solid #303949;font-size:12px}
+#workspace.files-open #terminals{width:100%}
+#filePanel .file-toolbar{padding:5px 8px;gap:5px;position:sticky;top:0;z-index:2;background:#111722}
+#filePanel .file-toolbar button,#filePanel .upload-button{padding:4px 8px;font-size:12px;border-radius:5px}
+#filePath{padding:5px 9px;font-size:11px;white-space:normal;overflow-wrap:anywhere;line-height:1.35}
+#fileList{display:block}
+#fileList .file-row,#fileList .file-head{display:grid;grid-template-columns:minmax(220px,2fr) 105px 65px 65px 80px 150px;gap:8px;padding:3px 8px;align-items:center}
+#fileList .file-row{min-height:28px;border-bottom:1px solid #202938}
+#fileList .file-head{position:sticky;top:32px;z-index:1;background:#171e29;color:#778397;font-size:10px;border-bottom:1px solid #303949}
+#fileList .file-row>span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#fileList .file-row small{display:inline;margin-left:8px;font-size:10px;white-space:nowrap}
+#fileList .file-row button{padding:2px 6px;font-size:11px}
+#filePanel .file-limit{padding:4px 8px;font-size:10px}
+#contextMenu{position:fixed;z-index:1100;min-width:130px;padding:4px;background:#1a2230;border:1px solid #425067;border-radius:7px;box-shadow:0 10px 35px #0009}
+#contextMenu button{display:block;width:100%;padding:7px 10px;border:0;background:transparent;text-align:left;font-size:12px}
+#contextMenu button:hover{background:#293446}
