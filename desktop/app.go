@@ -34,6 +34,8 @@ type desktopSession struct {
 	stdin   io.WriteCloser
 	sftp    *sftp.Client
 	close   sync.Once
+	notify  sync.Once
+	done    chan struct{}
 }
 
 type ConnectionRequest struct {
@@ -106,7 +108,7 @@ func (a *App) Connect(req ConnectionRequest) error {
 		return err
 	}
 	sftpClient, _ := sftp.NewClient(client)
-	entry := &desktopSession{client: client, session: shell, stdin: stdin, sftp: sftpClient}
+	entry := &desktopSession{client: client, session: shell, stdin: stdin, sftp: sftpClient, done: make(chan struct{})}
 	a.mu.Lock()
 	if old := a.sessions[req.ID]; old != nil {
 		old.stop()
@@ -115,6 +117,7 @@ func (a *App) Connect(req ConnectionRequest) error {
 	a.mu.Unlock()
 	go a.stream(req.ID, entry, stdout)
 	go a.stream(req.ID, entry, stderr)
+	go a.keepalive(req.ID, entry)
 	runtime.EventsEmit(a.ctx, "ssh:connected", req.ID)
 	return nil
 }
@@ -130,7 +133,24 @@ func (a *App) stream(id string, session *desktopSession, reader io.Reader) {
 			break
 		}
 	}
-	runtime.EventsEmit(a.ctx, "ssh:closed", id)
+	session.notify.Do(func() { runtime.EventsEmit(a.ctx, "ssh:closed", id) })
+}
+
+func (a *App) keepalive(id string, session *desktopSession) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-session.done:
+			return
+		case <-ticker.C:
+			if _, _, err := session.client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
+				session.notify.Do(func() { runtime.EventsEmit(a.ctx, "ssh:closed", id) })
+				session.stop()
+				return
+			}
+		}
+	}
 }
 
 func (a *App) Input(id, data string) error {
@@ -424,6 +444,7 @@ func (a *App) getSession(id string) (*desktopSession, error) {
 }
 func (s *desktopSession) stop() {
 	s.close.Do(func() {
+		close(s.done)
 		if s.sftp != nil {
 			s.sftp.Close()
 		}
