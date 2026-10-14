@@ -140,6 +140,7 @@ let editingForwards=[],forwardEditingIndex=-1;
 let imagePreviewFile=null,imageZoom=1;
 let serviceExecutableFile=null,systemdServiceItems=[];
 let commandHistoryIndex=0,filteredCommandHistory=[];
+let terminalCopyMode=false;
 const transfers=new Map();
 let transferTab='upload';
 const editorHighlightStyle=HighlightStyle.define([
@@ -230,11 +231,19 @@ term.onData(data=>{
 });
 term.onResize(({cols,rows})=>sessionId&&Resize(sessionId,cols,rows));
 new ResizeObserver(()=>fit.fit()).observe($('#terminal'));
+
+function setTerminalCopyMode(enabled){
+  terminalCopyMode=enabled;
+  term.options.mouseEventsRequireAlt=enabled;
+  $('#terminal').classList.toggle('copy-mode',enabled);
+  setStatus(enabled?'终端复制模式：拖动选择，Ctrl+C 复制；按住 Alt 操作终端鼠标，Esc 退出':'已退出终端复制模式',enabled?'#73daca':'#98a6b8');
+  if(!enabled) term.focus();
+}
 $('#terminal').addEventListener('contextmenu',event=>{
   event.preventDefault();
   event.stopPropagation();
   const menu=$('#terminalContextMenu');
-  menu.innerHTML=`<button data-terminal-action="copy" ${term.hasSelection()?'':'disabled'}>复制</button><button data-terminal-action="paste">粘贴</button><div class="context-separator"></div><button data-terminal-action="services">systemd 服务管理</button><button data-terminal-action="selectAll">全选终端内容</button><button data-terminal-action="clear">清空终端</button>`;
+  menu.innerHTML=`<button data-terminal-action="copy" ${term.hasSelection()?'':'disabled'}>复制选中内容</button><button data-terminal-action="copyMode">${terminalCopyMode?'退出复制模式':'进入复制模式'}</button><button data-terminal-action="paste">粘贴</button><div class="context-separator"></div><button data-terminal-action="services">systemd 服务管理</button><button data-terminal-action="selectAll">全选终端内容</button><button data-terminal-action="clear">清空终端</button>`;
   menu.hidden=false;
   const width=menu.offsetWidth,height=menu.offsetHeight;
   menu.style.left=`${Math.max(8,Math.min(event.clientX,window.innerWidth-width-8))}px`;
@@ -243,6 +252,7 @@ $('#terminal').addEventListener('contextmenu',event=>{
     menu.hidden=true;
     const action=button.dataset.terminalAction;
     if(action==='copy'&&term.hasSelection()) await ClipboardSetText(term.getSelection());
+    if(action==='copyMode') setTerminalCopyMode(!terminalCopyMode);
     if(action==='paste'){
       const targetSession=sessionId;
       const text=await ClipboardGetText();
@@ -251,7 +261,7 @@ $('#terminal').addEventListener('contextmenu',event=>{
     if(action==='selectAll') term.selectAll();
     if(action==='clear'){term.clear();const state=sshSessions.get(sessionId);if(state)state.output=''}
     if(action==='services') openServiceManager();
-    term.focus();
+    if(!terminalCopyMode) term.focus();
   });
 });
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#terminalContextMenu'))$('#terminalContextMenu').hidden=true});
@@ -1544,6 +1554,11 @@ function initSearchBox(){
     if(event.type!=='keydown') return true;
     const control=event.ctrlKey||event.metaKey;
     const key=event.key.toLowerCase();
+    if(terminalCopyMode&&key==='escape'){
+      event.preventDefault();
+      setTerminalCopyMode(false);
+      return false;
+    }
     if(control&&key==='f'){
       event.preventDefault();
       openSearch('terminal');

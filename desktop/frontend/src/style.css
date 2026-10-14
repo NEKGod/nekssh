@@ -125,6 +125,8 @@ header{height:50px;display:flex;align-items:center;justify-content:space-between
 #workspace{display:grid;grid-template-rows:minmax(250px,1fr) 6px 220px;flex:1;min-height:0}
 #terminal{margin:0;padding:0;background:#080b10;color:#d8dee9;overflow:hidden;white-space:normal;font:14px/1.4 Consolas,monospace;outline:0}
 #terminal.keyboard-active{box-shadow:inset 0 0 0 1px #35b8a066}
+#terminal.copy-mode{box-shadow:inset 0 0 0 2px #73daca;cursor:text}
+#terminal.copy-mode .xterm-screen{cursor:text!important}
 #fileResizeHandle{background:#202938;border-top:1px solid #303949;border-bottom:1px solid #0b0e14;cursor:ns-resize;touch-action:none}
 #fileResizeHandle:hover,.resizing-files #fileResizeHandle{background:#35b8a0}
 .resizing-files{cursor:ns-resize;user-select:none}

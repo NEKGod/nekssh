@@ -26,9 +26,9 @@
     "@codemirror/language": "^6.12.4",
     "@codemirror/legacy-modes": "^6.5.3",
     "@lezer/highlight": "^1.2.3",
-    "@xterm/addon-fit": "^0.10.0",
+    "@xterm/addon-fit": "0.11.0",
     "@xterm/addon-search": "^0.16.0",
-    "@xterm/xterm": "^5.5.0",
+    "@xterm/xterm": "6.1.0-beta.304",
     "codemirror": "^6.0.2",
     "diff": "^9.0.0"
   }
