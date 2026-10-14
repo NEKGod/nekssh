@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unsafe"
 
@@ -269,6 +270,7 @@ func (a *App) Connect(req ConnectionRequest) error {
 	}
 	sftpClient, _ := sftp.NewClient(client)
 	entry := &desktopSession{host: req.Host, client: client, session: shell, stdin: stdin, sftp: sftpClient, done: make(chan struct{}), app: a}
+	var notes []string
 	if req.ListenPort > 0 && req.TargetHost != "" && req.TargetPort > 0 {
 		req.Forwards = append(req.Forwards, LocalForward{Name: "本地转发", ListenAddress: req.ListenAddress, ListenPort: req.ListenPort, TargetHost: req.TargetHost, TargetPort: req.TargetPort, Enabled: true})
 	}
@@ -280,9 +282,13 @@ func (a *App) Connect(req ConnectionRequest) error {
 		if listenAddress == "" {
 			listenAddress = "127.0.0.1"
 		}
-		if registerErr := a.registerForward(entry, listenAddress, forward); registerErr != nil {
-			entry.stop()
-			return fmt.Errorf("启动转发规则 %q 失败: %w", forward.Name, registerErr)
+		note, registerErr := a.registerForward(entry, listenAddress, forward)
+		if registerErr != nil {
+			notes = append(notes, fmt.Sprintf("转发规则 %q 未启动: %v", forward.Name, registerErr))
+			continue
+		}
+		if note != "" {
+			notes = append(notes, note)
 		}
 	}
 	a.mu.Lock()
@@ -295,6 +301,9 @@ func (a *App) Connect(req ConnectionRequest) error {
 	go a.stream(req.ID, entry, stderr)
 	go a.keepalive(req.ID, entry)
 	runtime.EventsEmit(a.ctx, "ssh:connected", req.ID)
+	if len(notes) > 0 {
+		runtime.EventsEmit(a.ctx, "forward:notice", req.ID, strings.Join(notes, "；"))
+	}
 	return nil
 }
 
@@ -362,28 +371,38 @@ func dialHTTPProxy(req ConnectionRequest, target string) (net.Conn, error) {
 	return connection, nil
 }
 
-func (a *App) registerForward(session *desktopSession, listenAddress string, rule LocalForward) error {
+func (a *App) registerForward(session *desktopSession, listenAddress string, rule LocalForward) (string, error) {
+	if rule.ListenPort <= 0 || rule.ListenPort > 65535 {
+		return "", fmt.Errorf("监听端口无效")
+	}
 	key := net.JoinHostPort(listenAddress, strconv.Itoa(rule.ListenPort))
 	target := net.JoinHostPort(rule.TargetHost, strconv.Itoa(rule.TargetPort))
 	a.forwardMu.Lock()
 	defer a.forwardMu.Unlock()
 	if existing := a.forwards[key]; existing != nil {
 		if existing.target != target {
-			return fmt.Errorf("%s 已转发到 %s", key, existing.target)
+			return "", fmt.Errorf("%s 已转发到 %s", key, existing.target)
 		}
 		existing.sessions[session] = true
 		session.forwardKeys = append(session.forwardKeys, key)
-		return nil
+		return "", nil
 	}
 	listener, err := net.Listen("tcp", key)
 	if err != nil {
-		return err
+		if isAddrInUse(err) {
+			return fmt.Sprintf("转发 %s：%s 已由其他程序监听，本实例不再绑定", rule.Name, key), nil
+		}
+		return "", err
 	}
 	forward := &sharedForward{listener: listener, target: target, sessions: map[*desktopSession]bool{session: true}}
 	a.forwards[key] = forward
 	session.forwardKeys = append(session.forwardKeys, key)
 	go a.forwardLocal(forward)
-	return nil
+	return "", nil
+}
+
+func isAddrInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE)
 }
 
 func (a *App) forwardLocal(forward *sharedForward) {
@@ -802,6 +821,40 @@ func (a *App) ReadRemoteImage(id, remotePath string) (RemoteImage, error) {
 	return RemoteImage{Name: path.Base(remotePath), Size: info.Size(), Data: base64.StdEncoding.EncodeToString(data)}, nil
 }
 
+func (a *App) ReadRemotePDF(id, remotePath string) (RemoteImage, error) {
+	session, err := a.getSession(id)
+	if err != nil {
+		return RemoteImage{}, err
+	}
+	if session.sftp == nil {
+		return RemoteImage{}, errors.New("目标服务器不支持 SFTP")
+	}
+	info, err := session.sftp.Stat(remotePath)
+	if err != nil {
+		return RemoteImage{}, err
+	}
+	if info.IsDir() {
+		return RemoteImage{}, errors.New("目录不能作为 PDF 打开")
+	}
+	const maxPDFSize = 40 * 1024 * 1024
+	if info.Size() > maxPDFSize {
+		return RemoteImage{}, errors.New("PDF 超过 40 MB，请下载后查看")
+	}
+	file, err := session.sftp.Open(remotePath)
+	if err != nil {
+		return RemoteImage{}, err
+	}
+	defer file.Close()
+	data, err := io.ReadAll(io.LimitReader(file, maxPDFSize+1))
+	if err != nil {
+		return RemoteImage{}, err
+	}
+	if len(data) < 5 || string(data[:5]) != "%PDF-" {
+		return RemoteImage{}, errors.New("这不是有效的 PDF 文件")
+	}
+	return RemoteImage{Name: path.Base(remotePath), Size: info.Size(), Data: base64.StdEncoding.EncodeToString(data)}, nil
+}
+
 func (a *App) IsELF(id, remotePath string) (bool, error) {
 	session, err := a.getSession(id)
 	if err != nil {
@@ -1124,30 +1177,64 @@ func (a *App) DownloadFile(id, remotePath, operationID string) error {
 	if info.IsDir() {
 		return errors.New("请选择一个文件")
 	}
-	destination, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{Title: "保存远程文件", DefaultFilename: path.Base(remotePath)})
+	destination, err := chooseSavePath("保存远程文件", path.Base(remotePath))
 	if err != nil || destination == "" {
+		if err != nil {
+			debugf("download dialog %s: %v", remotePath, err)
+		}
 		return err
 	}
+	debugf("download %s -> %s size=%d", remotePath, destination, info.Size())
 	source, err := session.sftp.Open(remotePath)
 	if err != nil {
 		return err
 	}
 	defer source.Close()
-	target, err := os.Create(destination)
+	offset, err := localResumeOffset(destination, info.Size())
 	if err != nil {
 		return err
 	}
-	defer target.Close()
-	progress := &progressWriter{app: a, id: operationID, direction: "download", name: path.Base(remotePath), localPath: destination, total: info.Size()}
-	progress.emit("进行中")
-	_, err = io.Copy(target, io.TeeReader(source, progress))
-	if err == nil {
+	progress := &progressWriter{app: a, id: operationID, direction: "download", name: path.Base(remotePath), localPath: destination, total: info.Size(), transferred: offset}
+	if offset == info.Size() {
 		progress.emit("已完成")
+		return nil
+	}
+	flags := os.O_CREATE | os.O_WRONLY
+	if offset == 0 {
+		flags |= os.O_TRUNC
+	}
+	target, err := os.OpenFile(destination, flags, 0644)
+	if err != nil {
+		debugf("download open %s flags=%d: %v", destination, flags, err)
+		return fmt.Errorf("无法写入 %s: %w", destination, err)
+	}
+	defer target.Close()
+	if offset > 0 {
+		if _, err = source.Seek(offset, io.SeekStart); err != nil {
+			debugf("download remote seek %d: %v", offset, err)
+			return fmt.Errorf("无法从远程偏移 %d 继续下载: %w", offset, err)
+		}
+		if _, err = target.Seek(offset, io.SeekStart); err != nil {
+			debugf("download local seek %d: %v", offset, err)
+			return fmt.Errorf("无法从本地偏移 %d 继续写入: %w", offset, err)
+		}
+	}
+	err = copyWithProgress(target, source, progress, offset)
+	if err != nil {
+		debugf("download copy %s: %v", destination, err)
 	}
 	return err
 }
 
 func (a *App) UploadFile(id, remoteDirectory, operationID string) error {
+	sourcePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传的文件"})
+	if err != nil || sourcePath == "" {
+		return err
+	}
+	return a.UploadLocalFile(id, remoteDirectory, sourcePath, operationID)
+}
+
+func (a *App) UploadLocalFile(id, remoteDirectory, sourcePath, operationID string) error {
 	session, err := a.getSession(id)
 	if err != nil {
 		return err
@@ -1155,27 +1242,81 @@ func (a *App) UploadFile(id, remoteDirectory, operationID string) error {
 	if session.sftp == nil {
 		return errors.New("目标服务器不支持 SFTP")
 	}
-	sourcePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择要上传的文件"})
-	if err != nil || sourcePath == "" {
+	info, err := os.Stat(sourcePath)
+	if err != nil {
 		return err
+	}
+	if info.IsDir() {
+		return errors.New("请拖拽或选择文件，暂不支持上传整个目录")
 	}
 	source, err := os.Open(sourcePath)
 	if err != nil {
 		return err
 	}
 	defer source.Close()
-	info, err := source.Stat()
-	if err != nil {
-		return err
+	remotePath := path.Join(remoteDirectory, filepath.Base(sourcePath))
+	offset := int64(0)
+	if remoteInfo, statErr := session.sftp.Stat(remotePath); statErr == nil {
+		if remoteInfo.IsDir() {
+			return errors.New("远程存在同名目录，无法上传")
+		}
+		if remoteInfo.Size() <= info.Size() {
+			offset = remoteInfo.Size()
+		}
 	}
-	target, err := session.sftp.Create(path.Join(remoteDirectory, filepath.Base(sourcePath)))
-	if err != nil {
-		return err
+	progress := &progressWriter{app: a, id: operationID, direction: "upload", name: filepath.Base(sourcePath), total: info.Size(), transferred: offset}
+	if offset == info.Size() {
+		progress.emit("已完成")
+		return nil
+	}
+	var target *sftp.File
+	if offset > 0 {
+		target, err = session.sftp.OpenFile(remotePath, os.O_WRONLY)
+		if err != nil {
+			return err
+		}
+		if _, err = target.Seek(offset, io.SeekStart); err != nil {
+			target.Close()
+			return err
+		}
+		if _, err = source.Seek(offset, io.SeekStart); err != nil {
+			target.Close()
+			return err
+		}
+	} else {
+		target, err = session.sftp.Create(remotePath)
+		if err != nil {
+			return err
+		}
 	}
 	defer target.Close()
-	progress := &progressWriter{app: a, id: operationID, direction: "upload", name: filepath.Base(sourcePath), total: info.Size()}
-	progress.emit("进行中")
-	_, err = io.Copy(target, io.TeeReader(source, progress))
+	return copyWithProgress(target, source, progress, offset)
+}
+
+func localResumeOffset(destination string, remoteSize int64) (int64, error) {
+	stat, err := os.Stat(destination)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
+		return 0, err
+	}
+	if stat.IsDir() {
+		return 0, errors.New("保存位置是一个目录")
+	}
+	if stat.Size() > 0 && stat.Size() <= remoteSize {
+		return stat.Size(), nil
+	}
+	return 0, nil
+}
+
+func copyWithProgress(dst io.Writer, src io.Reader, progress *progressWriter, offset int64) error {
+	status := "进行中"
+	if offset > 0 {
+		status = "续传中"
+	}
+	progress.emit(status)
+	_, err := io.Copy(dst, io.TeeReader(src, progress))
 	if err == nil {
 		progress.emit("已完成")
 	}
@@ -1310,7 +1451,7 @@ func (a *App) DownloadDirectory(id, remotePath, operationID string) error {
 	if err != nil {
 		return err
 	}
-	destination, err := runtime.SaveFileDialog(a.ctx, runtime.SaveDialogOptions{Title: "保存目录压缩包", DefaultFilename: path.Base(strings.TrimRight(remotePath, "/")) + ".zip"})
+	destination, err := chooseSavePath("保存目录压缩包", path.Base(strings.TrimRight(remotePath, "/"))+".zip")
 	if err != nil || destination == "" {
 		return err
 	}
@@ -1556,4 +1697,161 @@ func friendlyDesktopError(err error) error {
 		return errors.New("连接超时")
 	}
 	return err
+}
+
+var (
+	comdlg32             = windows.NewLazySystemDLL("comdlg32.dll")
+	procGetSaveFileName  = comdlg32.NewProc("GetSaveFileNameW")
+	procCommDlgExtError  = comdlg32.NewProc("CommDlgExtendedError")
+	user32               = windows.NewLazySystemDLL("user32.dll")
+	procGetForegroundWnd = user32.NewProc("GetForegroundWindow")
+)
+
+type saveFileNameDialog struct {
+	StructSize      uint32
+	Owner           uintptr
+	Instance        uintptr
+	Filter          *uint16
+	CustomFilter    *uint16
+	MaxCustomFilter uint32
+	FilterIndex     uint32
+	File            *uint16
+	MaxFile         uint32
+	FileTitle       *uint16
+	MaxFileTitle    uint32
+	InitialDir      *uint16
+	Title           *uint16
+	Flags           uint32
+	FileOffset      uint16
+	FileExtension   uint16
+	DefExt          *uint16
+	CustData        uintptr
+	Hook            uintptr
+	TemplateName    *uint16
+	Reserved        uintptr
+	Reserved2       uint32
+	FlagsEx         uint32
+}
+
+func chooseSavePath(title, filename string) (string, error) {
+	filename = path.Base(strings.TrimSpace(filename))
+	if filename == "." || filename == "/" || filename == "" {
+		filename = "download"
+	}
+	buffer := make([]uint16, 32768)
+	name, err := windows.UTF16FromString(filename)
+	if err != nil {
+		return "", err
+	}
+	copy(buffer, name)
+	filter, err := utf16DoubleString("所有文件 (*.*)", "*.*")
+	if err != nil {
+		return "", err
+	}
+	titlePtr, err := windows.UTF16PtrFromString(title)
+	if err != nil {
+		return "", err
+	}
+	initial := ""
+	if home, homeErr := os.UserHomeDir(); homeErr == nil {
+		downloads := filepath.Join(home, "Downloads")
+		if stat, statErr := os.Stat(downloads); statErr == nil && stat.IsDir() {
+			initial = downloads
+		} else {
+			initial = home
+		}
+	}
+	var initialPtr *uint16
+	if initial != "" {
+		initialPtr, err = windows.UTF16PtrFromString(initial)
+		if err != nil {
+			return "", err
+		}
+	}
+	owner, _, _ := procGetForegroundWnd.Call()
+	dialog := saveFileNameDialog{
+		Owner:       owner,
+		Filter:      filter,
+		FilterIndex: 1,
+		File:        &buffer[0],
+		MaxFile:     uint32(len(buffer)),
+		InitialDir:  initialPtr,
+		Title:       titlePtr,
+		Flags:       0x00080000 | 0x00000800 | 0x00000002 | 0x00000008,
+	}
+	dialog.StructSize = uint32(unsafe.Sizeof(dialog))
+	ok, _, _ := procGetSaveFileName.Call(uintptr(unsafe.Pointer(&dialog)))
+	if ok == 0 {
+		code, _, _ := procCommDlgExtError.Call()
+		if code == 0 {
+			return "", nil
+		}
+		return "", fmt.Errorf("无法打开保存对话框 (%d)", code)
+	}
+	return windows.UTF16ToString(buffer), nil
+}
+
+func utf16DoubleString(parts ...string) (*uint16, error) {
+	encoded := make([]uint16, 0, 64)
+	for _, part := range parts {
+		item, err := windows.UTF16FromString(part)
+		if err != nil {
+			return nil, err
+		}
+		encoded = append(encoded, item...)
+	}
+	encoded = append(encoded, 0)
+	return &encoded[0], nil
+}
+
+var (
+	debugMu   sync.Mutex
+	debugFile *os.File
+)
+
+func debugLogPath() (string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return "", err
+	}
+	exe, err = filepath.EvalSymlinks(exe)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(exe), "debug.log"), nil
+}
+
+func (a *App) SetDebug(enabled bool) (string, error) {
+	logPath, err := debugLogPath()
+	if err != nil {
+		return "", err
+	}
+	debugMu.Lock()
+	defer debugMu.Unlock()
+	if debugFile != nil {
+		debugFile.Close()
+		debugFile = nil
+	}
+	if !enabled {
+		return logPath, nil
+	}
+	if err = os.MkdirAll(filepath.Dir(logPath), 0700); err != nil {
+		return logPath, err
+	}
+	file, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	if err != nil {
+		return logPath, err
+	}
+	debugFile = file
+	fmt.Fprintf(debugFile, "---- debug on %s ----\n", time.Now().Format(time.RFC3339))
+	return logPath, nil
+}
+
+func debugf(format string, args ...any) {
+	debugMu.Lock()
+	defer debugMu.Unlock()
+	if debugFile == nil {
+		return
+	}
+	fmt.Fprintf(debugFile, "%s %s\n", time.Now().Format("15:04:05.000"), fmt.Sprintf(format, args...))
 }

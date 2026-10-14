@@ -46,8 +46,11 @@ type clientMessage struct {
 	Cols int             `json:"cols,omitempty"`
 	Rows int             `json:"rows,omitempty"`
 	Conn *connectRequest `json:"connection,omitempty"`
-	Path string          `json:"path,omitempty"`
-	Name string          `json:"name,omitempty"`
+	Path   string `json:"path,omitempty"`
+	Name   string `json:"name,omitempty"`
+	ID     string `json:"id,omitempty"`
+	Offset int64  `json:"offset,omitempty"`
+	Size   int64  `json:"size,omitempty"`
 }
 
 type serverMessage struct {
@@ -61,6 +64,8 @@ type serverMessage struct {
 	Entries []fileEntry `json:"entries,omitempty"`
 	Count   int         `json:"count,omitempty"`
 	Size    int64       `json:"size,omitempty"`
+	Offset  int64       `json:"offset,omitempty"`
+	ID      string      `json:"id,omitempty"`
 }
 
 type fileEntry struct {
@@ -109,7 +114,7 @@ func terminalHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer ws.Close()
-	ws.SetReadLimit(16 << 20)
+	ws.SetReadLimit(64 << 20)
 
 	var first clientMessage
 	if err := ws.ReadJSON(&first); err != nil || first.Type != "connect" || first.Conn == nil {
@@ -199,8 +204,16 @@ func terminalHandler(w http.ResponseWriter, r *http.Request) {
 			err = handleSFTPList(sftpClient, msg.Path, send)
 		case "sftp_upload":
 			err = handleSFTPUpload(sftpClient, msg.Path, msg.Name, msg.Data, send)
+		case "sftp_upload_stat":
+			err = handleSFTPUploadStat(sftpClient, msg, send)
+		case "sftp_upload_chunk":
+			err = handleSFTPUploadChunk(sftpClient, msg, send)
 		case "sftp_download":
 			err = handleSFTPDownload(sftpClient, msg.Path, send)
+		case "sftp_download_stat":
+			err = handleSFTPDownloadStat(sftpClient, msg, send)
+		case "sftp_download_chunk":
+			err = handleSFTPDownloadChunk(sftpClient, msg, send)
 		case "sftp_estimate":
 			err = handleSFTPEstimate(sftpClient, msg.Path, send)
 		case "sftp_download_dir":
@@ -211,8 +224,6 @@ func terminalHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 }
-
-const maxTransferSize = 10 << 20
 
 func handleSFTPList(client *sftp.Client, remotePath string, send func(serverMessage) error) error {
 	if client == nil {
@@ -261,9 +272,6 @@ func handleSFTPUpload(client *sftp.Client, remotePath, name, encoded string, sen
 	if err != nil {
 		return send(serverMessage{Type: "sftp_error", Message: "上传数据无效"})
 	}
-	if len(data) > maxTransferSize {
-		return send(serverMessage{Type: "sftp_error", Message: "单个文件不能超过 10 MB"})
-	}
 	file, err := client.Create(path.Join(remotePath, name))
 	if err != nil {
 		return send(serverMessage{Type: "sftp_error", Message: "无法创建远程文件: " + err.Error()})
@@ -294,17 +302,123 @@ func handleSFTPDownload(client *sftp.Client, remotePath string, send func(server
 	if err != nil {
 		return send(serverMessage{Type: "sftp_error", Message: err.Error()})
 	}
-	if info.Size() > maxTransferSize {
-		return send(serverMessage{Type: "sftp_error", Message: "下载文件不能超过 10 MB"})
+	if info.IsDir() {
+		return send(serverMessage{Type: "sftp_error", Message: "请选择一个文件"})
 	}
-	data, err := io.ReadAll(io.LimitReader(file, maxTransferSize+1))
+	data, err := io.ReadAll(file)
 	if err != nil {
 		return send(serverMessage{Type: "sftp_error", Message: "下载失败: " + err.Error()})
 	}
 	return send(serverMessage{Type: "sftp_download", Name: path.Base(remotePath), Data: base64.StdEncoding.EncodeToString(data)})
 }
 
-const maxDirectorySize = 50 << 20
+func remoteUploadPath(remotePath, name string) (string, error) {
+	name = path.Base(strings.ReplaceAll(name, "\\", "/"))
+	if name == "." || name == "" {
+		return "", errors.New("文件名无效")
+	}
+	return path.Join(remotePath, name), nil
+}
+
+func handleSFTPUploadStat(client *sftp.Client, msg clientMessage, send func(serverMessage) error) error {
+	if client == nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "目标服务器不支持 SFTP"})
+	}
+	full, err := remoteUploadPath(msg.Path, msg.Name)
+	if err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: err.Error()})
+	}
+	offset := int64(0)
+	if info, statErr := client.Stat(full); statErr == nil && !info.IsDir() && info.Size() <= msg.Size {
+		offset = info.Size()
+	}
+	return send(serverMessage{Type: "sftp_upload_offset", ID: msg.ID, Name: path.Base(full), Offset: offset, Size: msg.Size})
+}
+
+func handleSFTPUploadChunk(client *sftp.Client, msg clientMessage, send func(serverMessage) error) error {
+	if client == nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "目标服务器不支持 SFTP"})
+	}
+	full, err := remoteUploadPath(msg.Path, msg.Name)
+	if err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: err.Error()})
+	}
+	data, err := base64.StdEncoding.DecodeString(msg.Data)
+	if err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "上传数据无效"})
+	}
+	var file *sftp.File
+	if msg.Offset == 0 {
+		file, err = client.Create(full)
+	} else {
+		info, statErr := client.Stat(full)
+		if statErr != nil || info.Size() != msg.Offset {
+			return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "续传位置和远程文件不一致"})
+		}
+		file, err = client.OpenFile(full, os.O_WRONLY)
+		if err == nil {
+			_, err = file.Seek(msg.Offset, io.SeekStart)
+		}
+	}
+	if err != nil {
+		if file != nil {
+			file.Close()
+		}
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "无法写入远程文件: " + err.Error()})
+	}
+	_, writeErr := file.Write(data)
+	closeErr := file.Close()
+	if writeErr != nil {
+		err = writeErr
+	} else {
+		err = closeErr
+	}
+	if err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "上传失败: " + err.Error()})
+	}
+	return send(serverMessage{Type: "sftp_upload_ack", ID: msg.ID, Name: path.Base(full), Offset: msg.Offset + int64(len(data)), Size: msg.Size})
+}
+
+func handleSFTPDownloadStat(client *sftp.Client, msg clientMessage, send func(serverMessage) error) error {
+	if client == nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "目标服务器不支持 SFTP"})
+	}
+	info, err := client.Stat(msg.Path)
+	if err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "无法读取文件: " + err.Error()})
+	}
+	if info.IsDir() {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "请选择一个文件"})
+	}
+	return send(serverMessage{Type: "sftp_download_stat", ID: msg.ID, Name: path.Base(msg.Path), Size: info.Size()})
+}
+
+func handleSFTPDownloadChunk(client *sftp.Client, msg clientMessage, send func(serverMessage) error) error {
+	if client == nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "目标服务器不支持 SFTP"})
+	}
+	length := msg.Size
+	if length <= 0 || length > 4<<20 {
+		length = 2 << 20
+	}
+	file, err := client.Open(msg.Path)
+	if err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "无法打开文件: " + err.Error()})
+	}
+	defer file.Close()
+	if _, err = file.Seek(msg.Offset, io.SeekStart); err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "无法定位续传位置: " + err.Error()})
+	}
+	buffer := make([]byte, length)
+	n, err := io.ReadFull(file, buffer)
+	if err == io.ErrUnexpectedEOF || err == io.EOF {
+		err = nil
+	}
+	if err != nil {
+		return send(serverMessage{Type: "sftp_error", ID: msg.ID, Message: "下载失败: " + err.Error()})
+	}
+	return send(serverMessage{Type: "sftp_download_chunk", ID: msg.ID, Name: path.Base(msg.Path), Offset: msg.Offset, Size: int64(n), Data: base64.StdEncoding.EncodeToString(buffer[:n])})
+}
 
 func estimateDirectory(client *sftp.Client, remotePath string) (int, int64, error) {
 	count, size := 0, int64(0)
@@ -317,9 +431,6 @@ func estimateDirectory(client *sftp.Client, remotePath string) (int, int64, erro
 		if info != nil && !info.IsDir() {
 			count++
 			size += info.Size()
-			if size > maxDirectorySize {
-				return count, size, fmt.Errorf("目录内容超过 50 MB 限制")
-			}
 		}
 	}
 	return count, size, nil
@@ -376,7 +487,7 @@ func handleSFTPDirectoryDownload(client *sftp.Client, remotePath string, send fu
 			archive.Close()
 			return send(serverMessage{Type: "sftp_error", Message: err.Error()})
 		}
-		_, copyErr := io.Copy(writer, io.LimitReader(file, maxDirectorySize))
+		_, copyErr := io.Copy(writer, file)
 		file.Close()
 		if copyErr != nil {
 			archive.Close()

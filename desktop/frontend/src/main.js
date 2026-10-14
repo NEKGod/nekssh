@@ -25,8 +25,8 @@ import { tags } from '@lezer/highlight';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { yaml } from '@codemirror/legacy-modes/mode/yaml';
 import { diffLines } from 'diff';
-import { CommandHistory, Connect, CreateSystemdService, DeletePath, Disconnect, DownloadDirectory, DownloadFile, FileHistory, Input, IsELF, ListFiles, MakeDirectory, OwnershipOptions, ProtectSecret, ReadFileHistory, ReadRemoteFile, ReadRemoteImage, RecordFileHistory, Resize, SaveRemoteFile, ScanConnectionHostKey, SelectPrivateKeyFile, ServerPartitions, ServerProcesses, ServerStats, SetPathMode, SetPathOwner, ShowInFolder, SignalProcess, SystemdDaemonReload, SystemdServiceAction, SystemdServicePath, SystemdServices, TrustHostKey, UnprotectSecret, UploadFile } from '../wailsjs/go/main/App.js';
-import { ClipboardGetText, ClipboardSetText, EventsOn } from '../wailsjs/runtime/runtime.js';
+import { CommandHistory, Connect, CreateSystemdService, DeletePath, Disconnect, DownloadDirectory, DownloadFile, FileHistory, Input, IsELF, ListFiles, MakeDirectory, OwnershipOptions, ProtectSecret, ReadFileHistory, ReadRemoteFile, ReadRemoteImage, ReadRemotePDF, RecordFileHistory, Resize, SaveRemoteFile, ScanConnectionHostKey, SelectPrivateKeyFile, ServerPartitions, ServerProcesses, ServerStats, SetPathMode, SetPathOwner, ShowInFolder, SignalProcess, SystemdDaemonReload, SystemdServiceAction, SystemdServicePath, SystemdServices, SetDebug, TrustHostKey, UnprotectSecret, UploadFile, UploadLocalFile } from '../wailsjs/go/main/App.js';
+import { ClipboardGetText, ClipboardSetText, EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js';
 
 document.querySelector('#app').innerHTML = `
 <div class="shell">
@@ -63,7 +63,7 @@ document.querySelector('#app').innerHTML = `
     </div>
   </aside>
   <main>
-    <header><div class="top-left"><button id="hostMenuButton">连接列表</button><button id="transferButton">传输列表 <b id="transferBadge" hidden>0</b></button><button id="commandHistoryButton">命令历史</button><span id="sessionTitle">未连接</span></div><span id="status">● 就绪</span></header>
+    <header><div class="top-left"><button id="hostMenuButton">连接列表</button><button id="transferButton">传输列表 <b id="transferBadge" hidden>0</b></button><button id="commandHistoryButton">命令历史</button><span id="sessionTitle">未连接</span></div><button id="debugButton" type="button">调试日志</button><span id="status">● 就绪</span></header>
     <div id="sessionTabs"><div class="tabs-empty">暂无连接</div></div>
     <div id="hostMenu" hidden>
       <div class="host-menu-head"><b>连接列表</b><button id="newConnection" class="primary">新建连接</button></div>
@@ -104,6 +104,8 @@ document.querySelector('#app').innerHTML = `
 <dialog id="permissionDialog"><div class="permission-window"><div class="permission-head"><div><b>文件属性</b><span id="permissionPath"></span></div><button id="permissionClose" class="icon-button">×</button></div><div class="permission-body"><label>权限<select id="permissionMode"><option value="644">644 · 标准文件</option><option value="600">600 · 私密文件</option><option value="664">664 · 组可写文件</option><option value="755">755 · 标准目录/程序</option><option value="700">700 · 私有目录/程序</option><option value="775">775 · 组可写目录</option><option value="777">777 · 所有人可写</option></select></label><div class="owner-fields"><label>所有者<select id="permissionOwner"></select></label><label>用户组<select id="permissionGroup"></select></label></div><div class="permission-preview"><span>所有者权限</span><span>用户组权限</span><span>其他用户权限</span></div></div><div class="permission-actions"><button id="permissionCancel">取消</button><button id="permissionSave" class="primary">应用属性</button></div></div></dialog>
 <dialog id="forwardDialog"><div class="forward-window"><div class="permission-head"><div><b id="forwardDialogTitle">添加转发规则</b><span>本地端口通过当前 SSH 会话转发</span></div><button id="forwardClose" class="icon-button">×</button></div><div class="forward-body"><label>规则名称<input id="forwardName" placeholder="Web 服务"></label><label class="remember-password"><input id="forwardEnabled" type="checkbox" checked><span>启用此规则</span></label><div class="row"><label>监听地址<input id="forwardListenAddress" value="127.0.0.1"></label><label class="port">监听端口<input id="forwardListenPort" type="number" placeholder="8080"></label></div><div class="row"><label>目标地址<input id="forwardTargetHost" value="127.0.0.1"></label><label class="port">目标端口<input id="forwardTargetPort" type="number" placeholder="80"></label></div></div><div class="permission-actions"><button id="forwardCancel">取消</button><button id="forwardSave" class="primary">保存规则</button></div></div></dialog>
 <dialog id="imageDialog"><div class="image-viewer"><div class="image-toolbar"><div><b id="imageName">图片查看器</b><span id="imageInfo"></span></div><div><button id="imageZoomOut" class="icon-button" title="缩小">−</button><button id="imageFit">适应窗口</button><button id="imageActual">原始大小</button><button id="imageZoomIn" class="icon-button" title="放大">＋</button><button id="imageDownload">下载</button><button id="imageClose" class="icon-button" title="关闭">×</button></div></div><div id="imageCanvas"><img id="imagePreview"></div></div></dialog>
+<dialog id="markdownDialog"><div class="markdown-viewer"><div class="image-toolbar"><div><b id="markdownName">Markdown</b><span id="markdownPath"></span></div><div><button id="markdownEdit">代码编辑</button><button id="markdownRefresh">刷新</button><button id="markdownClose" class="icon-button" title="关闭">×</button></div></div><div id="markdownLayout" class="markdown-layout"><aside id="markdownToc" hidden></aside><article id="markdownBody" class="markdown-body"></article></div></div></dialog>
+<dialog id="pdfDialog"><div class="image-viewer"><div class="image-toolbar"><div><b id="pdfName">PDF</b><span id="pdfInfo"></span></div><div><button id="pdfDownload">下载</button><button id="pdfClose" class="icon-button" title="关闭">×</button></div></div><iframe id="pdfFrame" title="PDF 预览"></iframe></div></dialog>
 <dialog id="createServiceDialog"><div class="service-create-window"><div class="permission-head"><div><b>创建 systemd 服务</b><span id="serviceExecutable"></span></div><button id="createServiceClose" class="icon-button">×</button></div><div class="service-create-body"><label>服务名称<input id="serviceName" placeholder="my-app"></label><label>描述<input id="serviceDescription" placeholder="My Application"></label><label>启动参数<input id="serviceArguments" placeholder="--config /etc/app.conf"></label><div class="row"><label>运行用户<input id="serviceUser" placeholder="root"></label><label>工作目录<input id="serviceWorkingDirectory"></label></div><label class="remember-password"><input id="serviceEnableNow" type="checkbox" checked><span>创建后设为开机启动并立即运行</span></label></div><div class="permission-actions"><button id="createServiceCancel">取消</button><button id="createServiceSave" class="primary">创建服务</button></div></div></dialog>
 <dialog id="serviceManagerDialog"><div class="service-manager-window"><div class="service-manager-head"><b>systemd 服务</b><input id="serviceSearch" placeholder="搜索服务"><button id="serviceRefresh">刷新</button><button id="serviceManagerClose" class="icon-button">×</button></div><div id="serviceList"></div></div></dialog>
 <div id="fileContextMenu" hidden></div><div id="tabContextMenu" hidden></div><div id="processContextMenu" hidden></div><div id="terminalContextMenu" hidden></div>`;
@@ -561,7 +563,12 @@ EventsOn('ssh:connected',id=>{
   const state=sshSessions.get(id);
   if(state) state.connected=true;
   renderSessionTabs();
-  if(id===sessionId)setStatus('已连接','#73daca');
+  if(id===sessionId)setStatus(state?.forwardNote||'已连接',state?.forwardNote?'#e0af68':'#73daca');
+});
+EventsOn('forward:notice',(id,message)=>{
+  const state=sshSessions.get(id);
+  if(state) state.forwardNote=message;
+  if(id===sessionId)setStatus(message,'#e0af68');
 });
 EventsOn('ssh:closed',id=>{
   const state=sshSessions.get(id);
@@ -649,9 +656,20 @@ function isImageFile(name){
   return /\.(png|jpe?g|gif|webp|bmp|svg|ico)$/i.test(name||'');
 }
 
+function isMarkdownFile(name){
+  return /\.(md|markdown|mdown)$/i.test(name||'');
+}
+
+function isPdfFile(name){
+  return /\.pdf$/i.test(name||'');
+}
+
 function openFileEntry(file){
   if(file.Directory) return loadFiles(file.Path);
-  return isImageFile(file.Name)?openImageViewer(file):openCodeEditor(file);
+  if(isImageFile(file.Name)) return openImageViewer(file);
+  if(isMarkdownFile(file.Name)) return openMarkdownViewer(file);
+  if(isPdfFile(file.Name)) return openPdfViewer(file);
+  return openCodeEditor(file);
 }
 
 function formatFileTime(value){
@@ -707,6 +725,202 @@ async function openCodeEditor(file,systemdConfig=false){
   }
 }
 
+let markdownFile=null;
+
+function markdownInline(text){
+  let value=escapeHtml(text);
+  value=value.replace(/`([^`]+)`/g,'<code>$1</code>');
+  value=value.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(_,label,href)=>{
+    if(/^(javascript|data):/i.test(href)) return label;
+    return `<a href="${href}" data-md-link="${href}">${label}</a>`;
+  });
+  value=value.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
+  value=value.replace(/(^|[^*])\*([^*]+)\*/g,'$1<em>$2</em>');
+  return value;
+}
+
+function markdownAnchor(text, used){
+  const plain=text.replace(/\[(.*?)\]\([^)]*\)/g,'$1').replace(/[`*_]/g,'').trim();
+  let slug=plain.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9\u4e00-\u9fff-]/g,'');
+  if(!slug) slug='section';
+  let unique=slug;
+  let number=2;
+  while(used.has(unique)) unique=`${slug}-${number++}`;
+  used.add(unique);
+  return unique;
+}
+
+function markdownPlain(text){
+  return text.replace(/\[(.*?)\]\([^)]*\)/g,'$1').replace(/[`*_]/g,'').trim();
+}
+
+function renderMarkdown(source, outline=[], used=new Set()){
+  const lines=String(source||'').replace(/\r\n/g,'\n').split('\n');
+  const html=[];
+  let index=0;
+  const nextBlock=()=>{
+    while(index<lines.length&&lines[index].trim()==='') index++;
+  };
+  while(index<lines.length){
+    nextBlock();
+    if(index>=lines.length) break;
+    const line=lines[index];
+    if(/^```/.test(line)){
+      const code=[];
+      index++;
+      while(index<lines.length&&!/^```/.test(lines[index])) code.push(lines[index++]);
+      if(index<lines.length) index++;
+      html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
+      continue;
+    }
+    const heading=line.match(/^(#{1,6})\s+(.*)$/);
+    if(heading){
+      const level=heading[1].length;
+      const id=markdownAnchor(heading[2], used);
+      outline.push({level,id,text:markdownPlain(heading[2])});
+      html.push(`<h${level} id="${escapeHtml(id)}">${markdownInline(heading[2])}</h${level}>`);
+      index++;
+      continue;
+    }
+    if(/^(-{3,}|\*{3,})$/.test(line.trim())){
+      html.push('<hr>');
+      index++;
+      continue;
+    }
+    if(line.includes('|')&&index+1<lines.length&&/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index+1])){
+      const split=row=>row.trim().replace(/^\||\|$/g,'').split('|').map(cell=>cell.trim());
+      const head=split(line);
+      index+=2;
+      const rows=[];
+      while(index<lines.length&&lines[index].includes('|')&&lines[index].trim()!=='') rows.push(split(lines[index++]));
+      html.push(`<table><thead><tr>${head.map(cell=>`<th>${markdownInline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>`<td>${markdownInline(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
+      continue;
+    }
+    if(/^>\s?/.test(line)){
+      const quote=[];
+      while(index<lines.length&&/^>\s?/.test(lines[index])) quote.push(lines[index++].replace(/^>\s?/,''));
+      html.push(`<blockquote>${renderMarkdown(quote.join('\n'), outline, used)}</blockquote>`);
+      continue;
+    }
+    if(/^\s*([-*+]|\d+\.)\s+/.test(line)){
+      const ordered=/^\s*\d+\.\s+/.test(line);
+      const items=[];
+      while(index<lines.length&&/^\s*([-*+]|\d+\.)\s+/.test(lines[index])){
+        const item=lines[index].replace(/^\s*([-*+]|\d+\.)\s+/,'');
+        const task=item.match(/^\[( |x|X)\]\s+(.*)$/);
+        items.push(task?`<li class="task"><input type="checkbox" disabled${task[1].toLowerCase()==='x'?' checked':''}>${markdownInline(task[2])}</li>`:`<li>${markdownInline(item)}</li>`);
+        index++;
+      }
+      html.push(ordered?`<ol>${items.join('')}</ol>`:`<ul>${items.join('')}</ul>`);
+      continue;
+    }
+    const paragraph=[];
+    while(index<lines.length&&lines[index].trim()!==''&&!/^(#{1,6}\s|```|>\s?|\s*([-*+]|\d+\.)\s+)/.test(lines[index])&&!/^(-{3,}|\*{3,})$/.test(lines[index].trim())) paragraph.push(lines[index++]);
+    html.push(`<p>${markdownInline(paragraph.join(' '))}</p>`);
+  }
+  return html.join('');
+}
+
+function resolveMarkdownLink(href){
+  if(/^(https?:|mailto:)/i.test(href)) return {external:href};
+  if(href.startsWith('#')) return {hash:href.slice(1)};
+  const clean=href.split('#')[0].split('?')[0];
+  if(!clean||!isMarkdownFile(clean)) return null;
+  const base=parentRemotePath(markdownFile?.Path||'/');
+  const joined=clean.startsWith('/')?clean:pathJoinRemote(base,clean);
+  return {path:joined.replace(/\/{2,}/g,'/')};
+}
+
+function pathJoinRemote(directory,name){
+  const parts=[];
+  `${directory}/${name}`.split('/').forEach(part=>{
+    if(!part||part==='.') return;
+    if(part==='..') parts.pop();
+    else parts.push(part);
+  });
+  return `/${parts.join('/')}`;
+}
+
+async function openMarkdownViewer(file){
+  markdownFile=file;
+  const dialog=$('#markdownDialog');
+  $('#markdownName').textContent=file.Name;
+  $('#markdownPath').textContent=file.Path;
+  $('#markdownBody').innerHTML='<p class="markdown-status">正在读取...</p>';
+  if(!dialog.open) dialog.showModal();
+  try{
+    const content=await ReadRemoteFile(sessionId,file.Path);
+    if(markdownFile?.Path!==file.Path) return;
+    currentMarkdownHeading='';
+    const outline=[];
+    $('#markdownBody').innerHTML=renderMarkdown(content, outline)||'<p class="markdown-status">这个文件是空的</p>';
+    renderMarkdownToc(outline);
+    markCurrentMarkdownHeading();
+  }catch(error){
+    if(dialog.open&&markdownFile?.Path===file.Path) dialog.close();
+    alert(String(error));
+  }
+}
+
+function renderMarkdownToc(outline){
+  const toc=$('#markdownToc');
+  const layout=$('#markdownLayout');
+  if(!outline.length){
+    toc.hidden=true;
+    layout.classList.add('no-toc');
+    toc.innerHTML='';
+    return;
+  }
+  const minLevel=Math.min(...outline.map(item=>item.level));
+  toc.hidden=false;
+  layout.classList.remove('no-toc');
+  toc.innerHTML=`<b>目录</b>${outline.map(item=>`<button type="button" data-heading="${escapeHtml(item.id)}" style="padding-left:${8+(item.level-minLevel)*14}px">${escapeHtml(item.text)}</button>`).join('')}`;
+}
+
+let currentMarkdownHeading='';
+
+function markCurrentMarkdownHeading(){
+  const body=$('#markdownBody');
+  const headings=[...body.querySelectorAll('h1,h2,h3,h4,h5,h6')];
+  const buttons=[...$('#markdownToc').querySelectorAll('[data-heading]')];
+  if(!headings.length||!buttons.length) return;
+  const edge=body.getBoundingClientRect().top+16;
+  let current=headings[0];
+  for(const heading of headings){
+    if(heading.getBoundingClientRect().top<=edge) current=heading;
+  }
+  if(current.id===currentMarkdownHeading) return;
+  currentMarkdownHeading=current.id;
+  buttons.forEach(button=>button.classList.toggle('active',button.dataset.heading===current.id));
+  $('#markdownToc').querySelector('.active')?.scrollIntoView({block:'nearest'});
+}
+
+$('#markdownToc').addEventListener('click',event=>{
+  const button=event.target.closest('[data-heading]');
+  if(!button) return;
+  $('#markdownBody').querySelector(`[id="${CSS.escape(button.dataset.heading)}"]`)?.scrollIntoView({behavior:'smooth',block:'start'});
+});
+$('#markdownBody').addEventListener('scroll',markCurrentMarkdownHeading);
+$('#markdownClose').onclick=()=>$('#markdownDialog').close();
+$('#markdownRefresh').onclick=()=>{if(markdownFile) openMarkdownViewer(markdownFile)};
+$('#markdownEdit').onclick=()=>{
+  const file=markdownFile;
+  $('#markdownDialog').close();
+  if(file) openCodeEditor(file);
+};
+$('#markdownDialog').addEventListener('cancel',event=>{event.preventDefault();$('#markdownDialog').close()});
+$('#markdownBody').addEventListener('click',event=>{
+  const link=event.target.closest('a[data-md-link]');
+  if(!link) return;
+  event.preventDefault();
+  const target=resolveMarkdownLink(link.dataset.mdLink);
+  if(!target) return;
+  if(target.external){window.open(target.external);return}
+  if(target.hash){$('#markdownBody').querySelector(`[id="${CSS.escape(target.hash)}"]`)?.scrollIntoView();return}
+  const name=target.path.split('/').pop();
+  openMarkdownViewer({Name:name,Path:target.path});
+});
+
 async function openImageViewer(file){
   imagePreviewFile=file;
   imageZoom=1;
@@ -754,6 +968,41 @@ $('#imageZoomIn').onclick=()=>zoomImagePreview(.25);
 $('#imageZoomOut').onclick=()=>zoomImagePreview(-.25);
 $('#imageClose').onclick=()=>$('#imageDialog').close();
 $('#imageDialog').addEventListener('cancel',event=>{event.preventDefault();$('#imageDialog').close()});
+let pdfPreviewFile=null;
+let pdfObjectURL='';
+
+function closePdfViewer(){
+  $('#pdfDialog').close();
+  $('#pdfFrame').removeAttribute('src');
+  if(pdfObjectURL){URL.revokeObjectURL(pdfObjectURL);pdfObjectURL=''}
+}
+
+async function openPdfViewer(file){
+  pdfPreviewFile=file;
+  $('#pdfName').textContent=file.Name;
+  $('#pdfInfo').textContent='正在读取...';
+  closePdfViewer();
+  $('#pdfDialog').showModal();
+  try{
+    const pdf=await ReadRemotePDF(sessionId,file.Path);
+    const bytes=Uint8Array.from(atob(pdf.Data),char=>char.charCodeAt(0));
+    pdfObjectURL=URL.createObjectURL(new Blob([bytes],{type:'application/pdf'}));
+    $('#pdfFrame').src=pdfObjectURL;
+    $('#pdfInfo').textContent=formatBytes(pdf.Size);
+  }catch(error){
+    closePdfViewer();
+    alert(String(error));
+  }
+}
+
+$('#pdfClose').onclick=closePdfViewer;
+$('#pdfDialog').addEventListener('cancel',event=>{event.preventDefault();closePdfViewer()});
+$('#pdfDownload').onclick=async()=>{
+  if(!pdfPreviewFile) return;
+  const operationID=newTransferID();
+  try{await DownloadFile(sessionId,pdfPreviewFile.Path,operationID)}catch(error){markTransferFailed(operationID,'download',error)}
+};
+
 $('#imageDownload').onclick=async()=>{
   if(!imagePreviewFile) return;
   const operationID=newTransferID();
@@ -968,6 +1217,15 @@ $('#upload').onclick=async()=>{
   const operationID=newTransferID();
   try{await UploadFile(sessionId,currentPath,operationID);await loadFiles(currentPath)}catch(error){markTransferFailed(operationID,'upload',error)}
 };
+async function uploadDroppedFiles(paths){
+  if(!sessionId||!paths?.length) return;
+  for(const localPath of paths){
+    const operationID=newTransferID();
+    try{await UploadLocalFile(sessionId,currentPath,localPath,operationID)}catch(error){markTransferFailed(operationID,'upload',error)}
+  }
+  try{await loadFiles(currentPath)}catch(error){console.warn(error)}
+}
+OnFileDrop((_x,_y,paths)=>uploadDroppedFiles(paths),true);
 $('#mkdir').onclick=async()=>{
   const name=prompt('新目录名称');
   if(!name) return;
@@ -984,7 +1242,10 @@ async function fileMenu(event,file){
   if(!file.Directory){try{elf=await IsELF(sessionId,file.Path)}catch(error){console.warn(error)}}
   const primary=file.Directory
     ?'<button data-action="open"><i>↳</i><span>打开目录</span></button>'
-    :isImageFile(file.Name)?'<button data-action="preview"><i>▣</i><span>查看图片</span></button>':'<button data-action="edit"><i>&lt;/&gt;</i><span>代码编辑</span></button>';
+    :isImageFile(file.Name)?'<button data-action="preview"><i>▣</i><span>查看图片</span></button>'
+    :isMarkdownFile(file.Name)?'<button data-action="markdown"><i>M</i><span>Markdown 预览</span></button><button data-action="edit"><i>&lt;/&gt;</i><span>代码编辑</span></button>'
+    :isPdfFile(file.Name)?'<button data-action="pdf"><i>P</i><span>查看 PDF</span></button>'
+    :'<button data-action="edit"><i>&lt;/&gt;</i><span>代码编辑</span></button>';
   menu.innerHTML=`<div class="context-file"><b>${escapeHtml(file.Name)}</b><span>${file.Directory?'目录':formatSize(file.Size)}</span></div>${primary}<button data-action="download"><i>↓</i><span>下载</span></button>${elf?'<button data-action="createService"><i>●</i><span>创建 systemd 服务</span></button>':''}<button data-action="permission"><i>◆</i><span>权限与所有者</span></button><button data-action="copy"><i>□</i><span>复制完整路径</span></button><button data-action="refresh"><i>↻</i><span>刷新目录</span></button><div class="context-separator"></div><button data-action="delete" class="danger"><i>×</i><span>删除</span></button>`;
   menu.hidden=false;
   const width=menu.offsetWidth,height=menu.offsetHeight;
@@ -996,6 +1257,8 @@ async function fileMenu(event,file){
     if(action==='open') return loadFiles(file.Path);
     if(action==='edit') return openCodeEditor(file);
     if(action==='preview') return openImageViewer(file);
+    if(action==='markdown') return openMarkdownViewer(file);
+    if(action==='pdf') return openPdfViewer(file);
     if(action==='createService') return openCreateService(file);
     if(action==='permission') return openPermissionDialog(file);
     if(action==='refresh') return loadFiles(currentPath);
@@ -1583,4 +1846,16 @@ function formatSize(n){return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':
 function escapeHtml(value){const div=document.createElement('div');div.textContent=value;return div.innerHTML}
 
 window.addEventListener('beforeunload',()=>{for(const id of sshSessions.keys()) Disconnect(id)});
+async function applyDebug(enabled){
+  const button=$('#debugButton');
+  button.classList.toggle('active',enabled);
+  button.textContent=enabled?'调试日志开':'调试日志';
+  localStorage.setItem('nekssh.desktop.debug',enabled?'1':'0');
+  try{
+    const logPath=await SetDebug(enabled);
+    if(enabled) setStatus(`调试日志：${logPath}`,'#e0af68');
+  }catch(error){alert(String(error))}
+}
+$('#debugButton').onclick=()=>applyDebug(!$('#debugButton').classList.contains('active'));
+applyDebug(localStorage.getItem('nekssh.desktop.debug')==='1');
 renderHosts();
