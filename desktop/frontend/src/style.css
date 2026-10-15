@@ -2,7 +2,7 @@
 *{box-sizing:border-box}
 body{margin:0;overflow:hidden}
 .shell{height:100vh;display:flex}
-aside{width:260px;padding:12px;background:#111722;border-right:1px solid #293141;overflow:hidden;display:flex;flex-direction:column;gap:10px}
+aside{width:248px;padding:8px;background:#111722;border-right:1px solid #293141;overflow:hidden;display:flex;flex-direction:column;gap:8px}
 aside h1{margin:0 0 2px;color:#73daca;font-size:20px}
 button{padding:8px 11px;border:1px solid #384253;border-radius:7px;background:#1b2330;color:#dfe6f3;cursor:pointer}
 .primary,#newConnection{background:#35b8a0;color:#07120f;border:0;font-weight:700}
@@ -19,7 +19,7 @@ button{padding:8px 11px;border:1px solid #384253;border-radius:7px;background:#1
 .resource-bar i{display:block;width:0;height:100%;background:#35b8a0;transition:width .25s ease}
 .resource[data-level="warn"] .resource-bar i{background:#e0af68}
 .resource[data-level="high"] .resource-bar i{background:#f7768e}
-#processPanel{height:242px;min-height:160px;display:flex;flex:0 0 auto;flex-direction:column}
+#processPanel{height:180px;min-height:160px;display:flex;flex:0 0 auto;flex-direction:column}
 .process-head,.process-row{display:grid;grid-template-columns:42px 38px 38px minmax(0,1fr);gap:5px;align-items:center;padding:0 8px}
 .process-head{height:25px;color:#657084;background:#121923;font-size:9px}
 .process-search{padding:5px 7px;background:#121923;border-bottom:1px solid #263040}
@@ -60,8 +60,8 @@ button{padding:8px 11px;border:1px solid #384253;border-radius:7px;background:#1
 .partition-bar i{display:block;height:100%;background:#35b8a0}
 .partition-row:has(.partition-bar i[style*="100%"]) .partition-bar i{background:#f7768e}
 main{flex:1;display:flex;flex-direction:column;min-width:0}
-header{height:50px;display:flex;align-items:center;justify-content:space-between;padding:0 16px;background:#10151e;border-bottom:1px solid #293141;position:relative}
-.top-left{display:flex;align-items:center;gap:12px;min-width:0}
+header{height:46px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:0 12px;background:#10151e;border-bottom:1px solid #293141;position:relative}
+.top-left{display:flex;align-items:center;gap:8px;min-width:0;flex-wrap:wrap}
 #hostMenuButton{height:32px;padding:0 12px}
 #hostMenu{position:absolute;top:88px;left:278px;z-index:25;width:360px;max-width:calc(100vw - 310px);padding:8px;background:#151c27;border:1px solid #354052;box-shadow:0 12px 32px #0008}
 #hostMenu[hidden]{display:none}
@@ -133,7 +133,7 @@ header{height:50px;display:flex;align-items:center;justify-content:space-between
 #files{overflow:auto;background:#0f141d;color:#c8d1df;--wails-drop-target:drop}
 #fileList{outline:0}
 #fileList.keyboard-active{box-shadow:inset 0 0 0 1px #35b8a066}
-.filebar{position:sticky;top:0;z-index:3;min-height:45px;display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 10px;background:#151c27;border-bottom:1px solid #2a3444}
+.filebar{position:sticky;top:0;z-index:3;min-height:40px;display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 10px;background:#151c27;border-bottom:1px solid #2a3444}
 .file-location,.file-actions{display:flex;align-items:center;gap:6px;min-width:0}
 .file-location{position:relative;flex:1;overflow:visible}
 .file-actions{flex:0 0 auto}

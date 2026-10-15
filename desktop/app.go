@@ -39,9 +39,11 @@ type App struct {
 	ctx         context.Context
 	mu          sync.RWMutex
 	forwardMu   sync.Mutex
-	sessions    map[string]*desktopSession
-	pendingKeys map[string]ssh.PublicKey
-	forwards    map[string]*sharedForward
+	sessions         map[string]*desktopSession
+	pendingKeys      map[string]ssh.PublicKey
+	forwards         map[string]*sharedForward
+	statsRuns        statsRunGate
+	connectFollowUps []func()
 }
 
 type desktopSession struct {
@@ -238,6 +240,10 @@ func (a *App) Connect(req ConnectionRequest) error {
 	if req.Rows < 5 {
 		req.Rows = 30
 	}
+	if a.reusableClient(req.ID) {
+		finishSessionConnect(func() { a.signalConnected(req.ID) }, a.connectFollowUps)
+		return nil
+	}
 	auth, err := desktopAuth(req)
 	if err != nil {
 		return err
@@ -246,7 +252,7 @@ func (a *App) Connect(req ConnectionRequest) error {
 	if err != nil {
 		return err
 	}
-	client, err := dialSSH(req, &ssh.ClientConfig{User: req.Username, Auth: auth, HostKeyCallback: callback, Timeout: 10 * time.Second})
+	client, err := openSSH(req, &ssh.ClientConfig{User: req.Username, Auth: auth, HostKeyCallback: callback, Timeout: 10 * time.Second})
 	if err != nil {
 		return friendlyDesktopError(err)
 	}
@@ -300,12 +306,27 @@ func (a *App) Connect(req ConnectionRequest) error {
 	go a.stream(req.ID, entry, stdout)
 	go a.stream(req.ID, entry, stderr)
 	go a.keepalive(req.ID, entry)
-	runtime.EventsEmit(a.ctx, "ssh:connected", req.ID)
-	if len(notes) > 0 {
+	finishSessionConnect(func() { a.signalConnected(req.ID) }, a.connectFollowUps)
+	if len(notes) > 0 && a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "forward:notice", req.ID, strings.Join(notes, "；"))
 	}
 	return nil
 }
+
+func (a *App) reusableClient(id string) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	session := a.sessions[id]
+	return session != nil && session.client != nil
+}
+
+func (a *App) signalConnected(id string) {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "ssh:connected", id)
+	}
+}
+
+var openSSH = dialSSH
 
 func dialSSH(req ConnectionRequest, config *ssh.ClientConfig) (*ssh.Client, error) {
 	target := net.JoinHostPort(req.Host, strconv.Itoa(req.Port))
@@ -539,11 +560,13 @@ func (a *App) Resize(id string, cols, rows int) error {
 }
 
 func (a *App) ServerStats(id string) (ServerStats, error) {
-	session, err := a.getSession(id)
-	if err != nil {
-		return ServerStats{}, err
-	}
-	command := `set -e
+	var stats ServerStats
+	err := a.statsRuns.Run(id, func() error {
+		session, err := a.getSession(id)
+		if err != nil {
+			return err
+		}
+		command := `set -e
 host=$(hostname 2>/dev/null || uname -n 2>/dev/null || printf unknown)
 read cpu user nice system idle iowait irq softirq steal guest guestnice < /proc/stat
 total1=$((user+nice+system+idle+iowait+irq+softirq+steal))
@@ -558,16 +581,19 @@ printf 'cpu=%.1f\n' "$cpu_pct"
 free -b | awk '/^Mem:/ {print "mem_total="$2; print "mem_used="$3} /^Swap:/ {print "swap_total="$2; print "swap_used="$3}'
 df -B1 / | awk 'NR==2 {print "disk_total="$2; print "disk_used="$3}'
 `
-	sshSession, err := session.client.NewSession()
-	if err != nil {
-		return ServerStats{}, err
-	}
-	defer sshSession.Close()
-	output, err := sshSession.CombinedOutput(command)
-	if err != nil {
-		return ServerStats{}, fmt.Errorf("读取服务器资源失败: %w", err)
-	}
-	return parseServerStats(string(output)), nil
+		sshSession, err := session.client.NewSession()
+		if err != nil {
+			return err
+		}
+		defer sshSession.Close()
+		output, err := sshSession.CombinedOutput(command)
+		if err != nil {
+			return fmt.Errorf("读取服务器资源失败: %w", err)
+		}
+		stats = parseServerStats(string(output))
+		return nil
+	})
+	return stats, err
 }
 
 func parseServerStats(output string) ServerStats {

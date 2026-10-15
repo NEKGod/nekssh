@@ -388,7 +388,7 @@ async function activateSession(id){
   fit.fit();
   renderSessionTabs();
   if(state.connected){
-    await loadFiles(currentPath);
+    loadFiles(currentPath);
     startStatsRefresh(state.saved.name);
   }else{
     stopStatsRefresh();
@@ -1693,7 +1693,10 @@ function countVisibleFileRows(){
 }
 
 function startStatsRefresh(displayName){
-  stopStatsRefresh();
+  if(statsTimer){
+    clearInterval(statsTimer);
+    statsTimer=0;
+  }
   $('.server-name').textContent=displayName||'当前服务器';
   loadServerStats();
   statsTimer=window.setInterval(loadServerStats,5000);
@@ -1704,11 +1707,15 @@ function stopStatsRefresh(){
     clearInterval(statsTimer);
     statsTimer=0;
   }
+  statsFlight=null;
 }
 
+let statsFlight=null;
+
 async function loadServerStats(){
-  if(!sessionId) return;
+  if(!sessionId||statsFlight===sessionId) return;
   const requestedSession=sessionId;
+  statsFlight=requestedSession;
   try{
     const [stats,processes,partitions]=await Promise.all([ServerStats(requestedSession),ServerProcesses(requestedSession),ServerPartitions(requestedSession)]);
     if(requestedSession!==sessionId) return;
@@ -1723,6 +1730,8 @@ async function loadServerStats(){
     $('.server-name').textContent='资源信息不可用';
     $('#processList').innerHTML='<div class="panel-empty">进程信息不可用</div>';
     $('#partitionList').innerHTML='<div class="panel-empty">分区信息不可用</div>';
+  }finally{
+    if(statsFlight===requestedSession) statsFlight=null;
   }
 }
 
