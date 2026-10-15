@@ -591,11 +591,16 @@ EventsOn('transfer:progress',progress=>{
   renderTransfers();
 });
 
+let fileListToken=0;
+
 async function loadFiles(remotePath){
+  const requestedSession=sessionId;
+  const token=++fileListToken;
   try{
-    const entries=await ListFiles(sessionId,remotePath);
+    const entries=await ListFiles(requestedSession,remotePath);
+    if(requestedSession!==sessionId||token!==fileListToken) return;
     currentPath=entries[0]?.Path?.replace(/\/[^/]+$/,'')||remotePath;
-    const state=sshSessions.get(sessionId);
+    const state=sshSessions.get(requestedSession);
     if(state) state.path=currentPath;
     renderBreadcrumbs(currentPath);
     $('#pathInput').value=currentPath;
@@ -622,7 +627,7 @@ async function loadFiles(remotePath){
     }
     if(!entries.length) list.insertAdjacentHTML('beforeend','<div class="file-empty"><b>此目录为空</b><span>可以上传文件或新建目录</span></div>');
   }catch(error){
-    alert(String(error));
+    if(requestedSession===sessionId&&token===fileListToken) alert(String(error));
   }
 }
 
