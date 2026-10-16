@@ -2,7 +2,11 @@ package main
 
 import (
 	"errors"
+	"strconv"
+	"strings"
 	"sync"
+
+	"golang.org/x/crypto/ssh"
 )
 
 // errStatsInFlight is returned when a stats command is already running for the session.
@@ -47,6 +51,70 @@ func (g *statsRunGate) Run(id string, command func() error) error {
 // allowStatsRefresh is the overlap decision: a refresh already in flight must not start another.
 func allowStatsRefresh(inFlight bool) bool {
 	return !inFlight
+}
+
+// clientPool keeps one SSH client for repeated connections to the same target.
+type clientPool struct {
+	mu      sync.Mutex
+	entries map[string]*pooledClient
+}
+
+type pooledClient struct {
+	client *ssh.Client
+	refs   int
+}
+
+// Acquire returns a live client for key. shared is true when an existing client was reused.
+func (p *clientPool) Acquire(key string, dial func() (*ssh.Client, error)) (*ssh.Client, bool, error) {
+	p.mu.Lock()
+	if entry := p.entries[key]; entry != nil && entry.client != nil && entry.refs > 0 {
+		entry.refs++
+		client := entry.client
+		p.mu.Unlock()
+		return client, true, nil
+	}
+	p.mu.Unlock()
+	client, err := dial()
+	if err != nil {
+		return nil, false, err
+	}
+	if client == nil {
+		return nil, false, errors.New("SSH 连接失败")
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.entries == nil {
+		p.entries = map[string]*pooledClient{}
+	}
+	if entry := p.entries[key]; entry != nil && entry.client != nil && entry.refs > 0 {
+		entry.refs++
+		go client.Close()
+		return entry.client, true, nil
+	}
+	p.entries[key] = &pooledClient{client: client, refs: 1}
+	return client, false, nil
+}
+
+// Release drops one use of key and closes the client when nothing else uses it.
+func (p *clientPool) Release(key string) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	entry := p.entries[key]
+	if entry == nil {
+		return
+	}
+	entry.refs--
+	if entry.refs > 0 {
+		return
+	}
+	if entry.client != nil {
+		entry.client.Close()
+	}
+	delete(p.entries, key)
+}
+
+func clientShareKey(req ConnectionRequest) string {
+	return strings.Join([]string{req.Username, req.Host, strconv.Itoa(req.Port), req.ProxyType, req.ProxyHost, strconv.Itoa(req.ProxyPort)}, "\x00")
 }
 
 // finishSessionConnect signals the session ready before any follow-up work.

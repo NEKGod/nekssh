@@ -30,6 +30,11 @@
     "@xterm/addon-search": "^0.16.0",
     "@xterm/xterm": "6.1.0-beta.304",
     "codemirror": "^6.0.2",
-    "diff": "^9.0.0"
+    "diff": "^9.0.0",
+    "dompurify": "^3.4.17",
+    "highlight.js": "^11.12.0",
+    "markdown-it": "^15.0.3",
+    "markdown-it-task-lists": "^2.1.1",
+    "mermaid": "^12.2.0"
   }
 }

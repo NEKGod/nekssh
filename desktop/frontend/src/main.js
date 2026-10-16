@@ -25,6 +25,8 @@ import { tags } from '@lezer/highlight';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
 import { yaml } from '@codemirror/legacy-modes/mode/yaml';
 import { diffLines } from 'diff';
+import 'highlight.js/styles/github-dark.css';
+import { collectMarkdownOutline, renderMarkdown, renderMermaidBlocks } from './markdown-render.js';
 import { CommandHistory, Connect, CreateSystemdService, DeletePath, Disconnect, DownloadDirectory, DownloadFile, FileHistory, Input, IsELF, ListFiles, MakeDirectory, OwnershipOptions, ProtectSecret, ReadFileHistory, ReadRemoteFile, ReadRemoteImage, ReadRemotePDF, RecordFileHistory, Resize, SaveRemoteFile, ScanConnectionHostKey, SelectPrivateKeyFile, ServerPartitions, ServerProcesses, ServerStats, SetPathMode, SetPathOwner, ShowInFolder, SignalProcess, SystemdDaemonReload, SystemdServiceAction, SystemdServicePath, SystemdServices, SetDebug, TrustHostKey, UnprotectSecret, UploadFile, UploadLocalFile } from '../wailsjs/go/main/App.js';
 import { ClipboardGetText, ClipboardSetText, EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js';
 
@@ -104,7 +106,7 @@ document.querySelector('#app').innerHTML = `
 <dialog id="permissionDialog"><div class="permission-window"><div class="permission-head"><div><b>文件属性</b><span id="permissionPath"></span></div><button id="permissionClose" class="icon-button">×</button></div><div class="permission-body"><label>权限<select id="permissionMode"><option value="644">644 · 标准文件</option><option value="600">600 · 私密文件</option><option value="664">664 · 组可写文件</option><option value="755">755 · 标准目录/程序</option><option value="700">700 · 私有目录/程序</option><option value="775">775 · 组可写目录</option><option value="777">777 · 所有人可写</option></select></label><div class="owner-fields"><label>所有者<select id="permissionOwner"></select></label><label>用户组<select id="permissionGroup"></select></label></div><div class="permission-preview"><span>所有者权限</span><span>用户组权限</span><span>其他用户权限</span></div></div><div class="permission-actions"><button id="permissionCancel">取消</button><button id="permissionSave" class="primary">应用属性</button></div></div></dialog>
 <dialog id="forwardDialog"><div class="forward-window"><div class="permission-head"><div><b id="forwardDialogTitle">添加转发规则</b><span>本地端口通过当前 SSH 会话转发</span></div><button id="forwardClose" class="icon-button">×</button></div><div class="forward-body"><label>规则名称<input id="forwardName" placeholder="Web 服务"></label><label class="remember-password"><input id="forwardEnabled" type="checkbox" checked><span>启用此规则</span></label><div class="row"><label>监听地址<input id="forwardListenAddress" value="127.0.0.1"></label><label class="port">监听端口<input id="forwardListenPort" type="number" placeholder="8080"></label></div><div class="row"><label>目标地址<input id="forwardTargetHost" value="127.0.0.1"></label><label class="port">目标端口<input id="forwardTargetPort" type="number" placeholder="80"></label></div></div><div class="permission-actions"><button id="forwardCancel">取消</button><button id="forwardSave" class="primary">保存规则</button></div></div></dialog>
 <dialog id="imageDialog"><div class="image-viewer"><div class="image-toolbar"><div><b id="imageName">图片查看器</b><span id="imageInfo"></span></div><div><button id="imageZoomOut" class="icon-button" title="缩小">−</button><button id="imageFit">适应窗口</button><button id="imageActual">原始大小</button><button id="imageZoomIn" class="icon-button" title="放大">＋</button><button id="imageDownload">下载</button><button id="imageClose" class="icon-button" title="关闭">×</button></div></div><div id="imageCanvas"><img id="imagePreview"></div></div></dialog>
-<dialog id="markdownDialog"><div class="markdown-viewer"><div class="image-toolbar"><div><b id="markdownName">Markdown</b><span id="markdownPath"></span></div><div><button id="markdownEdit">代码编辑</button><button id="markdownRefresh">刷新</button><button id="markdownClose" class="icon-button" title="关闭">×</button></div></div><div id="markdownLayout" class="markdown-layout"><aside id="markdownToc" hidden></aside><article id="markdownBody" class="markdown-body"></article></div></div></dialog>
+<dialog id="markdownDialog"><div class="markdown-viewer"><div class="image-toolbar"><div><b id="markdownName">Markdown</b><span id="markdownPath"></span></div><div><button id="markdownEdit">代码编辑</button><button id="markdownRefresh">刷新</button><button id="markdownClose" class="icon-button" title="关闭">×</button></div></div><div id="markdownLayout" class="markdown-layout"><aside id="markdownToc" hidden></aside><article id="markdownBody" class="markdown-body"></article></div><div id="flowOverlay" hidden><div class="image-toolbar"><div><b>流程图</b><span id="flowZoomLabel">100%</span></div><div><button id="flowZoomOut" class="icon-button" title="缩小">−</button><button id="flowFit">适应窗口</button><button id="flowZoomIn" class="icon-button" title="放大">＋</button><button id="flowClose" class="icon-button" title="关闭">×</button></div></div><div id="flowViewport"><div id="flowStage"></div></div></div></div></dialog>
 <dialog id="pdfDialog"><div class="image-viewer"><div class="image-toolbar"><div><b id="pdfName">PDF</b><span id="pdfInfo"></span></div><div><button id="pdfDownload">下载</button><button id="pdfClose" class="icon-button" title="关闭">×</button></div></div><iframe id="pdfFrame" title="PDF 预览"></iframe></div></dialog>
 <dialog id="createServiceDialog"><div class="service-create-window"><div class="permission-head"><div><b>创建 systemd 服务</b><span id="serviceExecutable"></span></div><button id="createServiceClose" class="icon-button">×</button></div><div class="service-create-body"><label>服务名称<input id="serviceName" placeholder="my-app"></label><label>描述<input id="serviceDescription" placeholder="My Application"></label><label>启动参数<input id="serviceArguments" placeholder="--config /etc/app.conf"></label><div class="row"><label>运行用户<input id="serviceUser" placeholder="root"></label><label>工作目录<input id="serviceWorkingDirectory"></label></div><label class="remember-password"><input id="serviceEnableNow" type="checkbox" checked><span>创建后设为开机启动并立即运行</span></label></div><div class="permission-actions"><button id="createServiceCancel">取消</button><button id="createServiceSave" class="primary">创建服务</button></div></div></dialog>
 <dialog id="serviceManagerDialog"><div class="service-manager-window"><div class="service-manager-head"><b>systemd 服务</b><input id="serviceSearch" placeholder="搜索服务"><button id="serviceRefresh">刷新</button><button id="serviceManagerClose" class="icon-button">×</button></div><div id="serviceList"></div></div></dialog>
@@ -742,100 +744,6 @@ async function openCodeEditor(file,systemdConfig=false){
 
 let markdownFile=null;
 
-function markdownInline(text){
-  let value=escapeHtml(text);
-  value=value.replace(/`([^`]+)`/g,'<code>$1</code>');
-  value=value.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g,(_,label,href)=>{
-    if(/^(javascript|data):/i.test(href)) return label;
-    return `<a href="${href}" data-md-link="${href}">${label}</a>`;
-  });
-  value=value.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>');
-  value=value.replace(/(^|[^*])\*([^*]+)\*/g,'$1<em>$2</em>');
-  return value;
-}
-
-function markdownAnchor(text, used){
-  const plain=text.replace(/\[(.*?)\]\([^)]*\)/g,'$1').replace(/[`*_]/g,'').trim();
-  let slug=plain.toLowerCase().replace(/\s+/g,'-').replace(/[^a-z0-9\u4e00-\u9fff-]/g,'');
-  if(!slug) slug='section';
-  let unique=slug;
-  let number=2;
-  while(used.has(unique)) unique=`${slug}-${number++}`;
-  used.add(unique);
-  return unique;
-}
-
-function markdownPlain(text){
-  return text.replace(/\[(.*?)\]\([^)]*\)/g,'$1').replace(/[`*_]/g,'').trim();
-}
-
-function renderMarkdown(source, outline=[], used=new Set()){
-  const lines=String(source||'').replace(/\r\n/g,'\n').split('\n');
-  const html=[];
-  let index=0;
-  const nextBlock=()=>{
-    while(index<lines.length&&lines[index].trim()==='') index++;
-  };
-  while(index<lines.length){
-    nextBlock();
-    if(index>=lines.length) break;
-    const line=lines[index];
-    if(/^```/.test(line)){
-      const code=[];
-      index++;
-      while(index<lines.length&&!/^```/.test(lines[index])) code.push(lines[index++]);
-      if(index<lines.length) index++;
-      html.push(`<pre><code>${escapeHtml(code.join('\n'))}</code></pre>`);
-      continue;
-    }
-    const heading=line.match(/^(#{1,6})\s+(.*)$/);
-    if(heading){
-      const level=heading[1].length;
-      const id=markdownAnchor(heading[2], used);
-      outline.push({level,id,text:markdownPlain(heading[2])});
-      html.push(`<h${level} id="${escapeHtml(id)}">${markdownInline(heading[2])}</h${level}>`);
-      index++;
-      continue;
-    }
-    if(/^(-{3,}|\*{3,})$/.test(line.trim())){
-      html.push('<hr>');
-      index++;
-      continue;
-    }
-    if(line.includes('|')&&index+1<lines.length&&/^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)+\|?\s*$/.test(lines[index+1])){
-      const split=row=>row.trim().replace(/^\||\|$/g,'').split('|').map(cell=>cell.trim());
-      const head=split(line);
-      index+=2;
-      const rows=[];
-      while(index<lines.length&&lines[index].includes('|')&&lines[index].trim()!=='') rows.push(split(lines[index++]));
-      html.push(`<table><thead><tr>${head.map(cell=>`<th>${markdownInline(cell)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${row.map(cell=>`<td>${markdownInline(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`);
-      continue;
-    }
-    if(/^>\s?/.test(line)){
-      const quote=[];
-      while(index<lines.length&&/^>\s?/.test(lines[index])) quote.push(lines[index++].replace(/^>\s?/,''));
-      html.push(`<blockquote>${renderMarkdown(quote.join('\n'), outline, used)}</blockquote>`);
-      continue;
-    }
-    if(/^\s*([-*+]|\d+\.)\s+/.test(line)){
-      const ordered=/^\s*\d+\.\s+/.test(line);
-      const items=[];
-      while(index<lines.length&&/^\s*([-*+]|\d+\.)\s+/.test(lines[index])){
-        const item=lines[index].replace(/^\s*([-*+]|\d+\.)\s+/,'');
-        const task=item.match(/^\[( |x|X)\]\s+(.*)$/);
-        items.push(task?`<li class="task"><input type="checkbox" disabled${task[1].toLowerCase()==='x'?' checked':''}>${markdownInline(task[2])}</li>`:`<li>${markdownInline(item)}</li>`);
-        index++;
-      }
-      html.push(ordered?`<ol>${items.join('')}</ol>`:`<ul>${items.join('')}</ul>`);
-      continue;
-    }
-    const paragraph=[];
-    while(index<lines.length&&lines[index].trim()!==''&&!/^(#{1,6}\s|```|>\s?|\s*([-*+]|\d+\.)\s+)/.test(lines[index])&&!/^(-{3,}|\*{3,})$/.test(lines[index].trim())) paragraph.push(lines[index++]);
-    html.push(`<p>${markdownInline(paragraph.join(' '))}</p>`);
-  }
-  return html.join('');
-}
-
 function resolveMarkdownLink(href){
   if(/^(https?:|mailto:)/i.test(href)) return {external:href};
   if(href.startsWith('#')) return {hash:href.slice(1)};
@@ -867,9 +775,11 @@ async function openMarkdownViewer(file){
     const content=await ReadRemoteFile(sessionId,file.Path);
     if(markdownFile?.Path!==file.Path) return;
     currentMarkdownHeading='';
-    const outline=[];
-    $('#markdownBody').innerHTML=renderMarkdown(content, outline)||'<p class="markdown-status">这个文件是空的</p>';
-    renderMarkdownToc(outline);
+    const body=$('#markdownBody');
+    body.innerHTML=renderMarkdown(content)||'<p class="markdown-status">这个文件是空的</p>';
+    renderMarkdownToc(collectMarkdownOutline(body));
+    await renderMermaidBlocks(body);
+    if(markdownFile?.Path!==file.Path) return;
     markCurrentMarkdownHeading();
   }catch(error){
     if(dialog.open&&markdownFile?.Path===file.Path) dialog.close();
@@ -923,12 +833,92 @@ $('#markdownEdit').onclick=()=>{
   $('#markdownDialog').close();
   if(file) openCodeEditor(file);
 };
-$('#markdownDialog').addEventListener('cancel',event=>{event.preventDefault();$('#markdownDialog').close()});
+$('#markdownDialog').addEventListener('cancel',event=>{
+  event.preventDefault();
+  if(!$('#flowOverlay').hidden){$('#flowOverlay').hidden=true;return}
+  $('#markdownDialog').close();
+});
+$('#markdownClose').onclick=()=>{$('#flowOverlay').hidden=true;$('#markdownDialog').close()};
+let flowScale=1;
+let flowX=0;
+let flowY=0;
+
+function applyFlowTransform(){
+  $('#flowStage').style.transform=`translate(${flowX}px, ${flowY}px) scale(${flowScale})`;
+  const label=$('#flowZoomLabel');
+  if(label) label.textContent=`${Math.round(flowScale*100)}%`;
+}
+
+function flowSvgSize(svg){
+  const box=svg.viewBox&&svg.viewBox.baseVal;
+  const width=box&&box.width?box.width:parseFloat(svg.getAttribute('width'))||svg.getBBox().width||800;
+  const height=box&&box.height?box.height:parseFloat(svg.getAttribute('height'))||svg.getBBox().height||400;
+  return {width,height};
+}
+
+function fitFlowchart(){
+  const svg=$('#flowStage').querySelector('svg');
+  const viewport=$('#flowViewport');
+  if(!svg||!viewport) return;
+  const size=flowSvgSize(svg);
+  svg.style.width=`${size.width}px`;
+  svg.style.height=`${size.height}px`;
+  svg.style.maxWidth='none';
+  flowScale=Math.max(0.2, Math.min((viewport.clientWidth-48)/size.width, (viewport.clientHeight-48)/size.height));
+  flowX=(viewport.clientWidth-size.width*flowScale)/2;
+  flowY=(viewport.clientHeight-size.height*flowScale)/2;
+  applyFlowTransform();
+}
+
+function zoomFlowchart(next, clientX, clientY){
+  const viewport=$('#flowViewport');
+  const rect=viewport.getBoundingClientRect();
+  const originX=clientX==null?rect.width/2:clientX-rect.left;
+  const originY=clientY==null?rect.height/2:clientY-rect.top;
+  const scale=Math.max(0.2, Math.min(next, 6));
+  const ratio=scale/flowScale;
+  flowX=originX-(originX-flowX)*ratio;
+  flowY=originY-(originY-flowY)*ratio;
+  flowScale=scale;
+  applyFlowTransform();
+}
+
+function openFlowViewer(figure){
+  const svg=figure.querySelector('svg');
+  if(!svg) return;
+  $('#flowStage').innerHTML='';
+  const copy=svg.cloneNode(true);
+  copy.style.maxWidth='none';
+  $('#flowStage').append(copy);
+  $('#flowOverlay').hidden=false;
+  requestAnimationFrame(fitFlowchart);
+}
+
+$('#flowClose').onclick=()=>{$('#flowOverlay').hidden=true};
+$('#flowFit').onclick=fitFlowchart;
+$('#flowZoomIn').onclick=()=>zoomFlowchart(flowScale*1.25);
+$('#flowZoomOut').onclick=()=>zoomFlowchart(flowScale/1.25);
+$('#flowViewport').addEventListener('wheel',event=>{
+  event.preventDefault();
+  zoomFlowchart(flowScale*(event.deltaY<0?1.12:0.89), event.clientX, event.clientY);
+},{passive:false});
+$('#flowViewport').addEventListener('pointerdown',event=>{
+  if(event.button!==0) return;
+  const drag={x:event.clientX-flowX, y:event.clientY-flowY};
+  event.currentTarget.classList.add('dragging');
+  event.currentTarget.setPointerCapture(event.pointerId);
+  const move=moveEvent=>{flowX=moveEvent.clientX-drag.x;flowY=moveEvent.clientY-drag.y;applyFlowTransform()};
+  const up=()=>{event.currentTarget.classList.remove('dragging');event.currentTarget.removeEventListener('pointermove',move);event.currentTarget.removeEventListener('pointerup',up)};
+  event.currentTarget.addEventListener('pointermove',move);
+  event.currentTarget.addEventListener('pointerup',up);
+});
 $('#markdownBody').addEventListener('click',event=>{
-  const link=event.target.closest('a[data-md-link]');
+  const flow=event.target.closest('.markdown-flow');
+  if(flow){openFlowViewer(flow);return}
+  const link=event.target.closest('#markdownBody a[href]');
   if(!link) return;
   event.preventDefault();
-  const target=resolveMarkdownLink(link.dataset.mdLink);
+  const target=resolveMarkdownLink(link.getAttribute('href'));
   if(!target) return;
   if(target.external){window.open(target.external);return}
   if(target.hash){$('#markdownBody').querySelector(`[id="${CSS.escape(target.hash)}"]`)?.scrollIntoView();return}
@@ -1704,7 +1694,7 @@ function startStatsRefresh(displayName){
   }
   $('.server-name').textContent=displayName||'当前服务器';
   loadServerStats();
-  statsTimer=window.setInterval(loadServerStats,5000);
+  statsTimer=window.setInterval(loadServerStats,15000);
 }
 
 function stopStatsRefresh(){
@@ -1722,7 +1712,11 @@ async function loadServerStats(){
   const requestedSession=sessionId;
   statsFlight=requestedSession;
   try{
-    const [stats,processes,partitions]=await Promise.all([ServerStats(requestedSession),ServerProcesses(requestedSession),ServerPartitions(requestedSession)]);
+    const stats=await ServerStats(requestedSession);
+    if(requestedSession!==sessionId) return;
+    const processes=await ServerProcesses(requestedSession);
+    if(requestedSession!==sessionId) return;
+    const partitions=await ServerPartitions(requestedSession);
     if(requestedSession!==sessionId) return;
     if(stats.Host) $('.server-name').textContent=stats.Host;
     updateResource('cpu',stats.CPUPercent,`${stats.CPUPercent.toFixed(1)}%`);

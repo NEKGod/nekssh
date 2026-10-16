@@ -44,6 +44,7 @@ type App struct {
 	forwards         map[string]*sharedForward
 	statsRuns        statsRunGate
 	connectFollowUps []func()
+	clients          clientPool
 }
 
 type desktopSession struct {
@@ -57,6 +58,7 @@ type desktopSession struct {
 	done        chan struct{}
 	app         *App
 	forwardKeys []string
+	shareKey    string
 }
 
 type sharedForward struct {
@@ -252,7 +254,7 @@ func (a *App) Connect(req ConnectionRequest) error {
 	if err != nil {
 		return err
 	}
-	client, err := openSSH(req, &ssh.ClientConfig{User: req.Username, Auth: auth, HostKeyCallback: callback, Timeout: 10 * time.Second})
+	client, err := openSSH(req, &ssh.ClientConfig{User: req.Username, Auth: auth, HostKeyCallback: callback, Timeout: 15 * time.Second})
 	if err != nil {
 		return friendlyDesktopError(err)
 	}
@@ -303,8 +305,8 @@ func (a *App) Connect(req ConnectionRequest) error {
 	}
 	a.sessions[req.ID] = entry
 	a.mu.Unlock()
-	go a.stream(req.ID, entry, stdout)
-	go a.stream(req.ID, entry, stderr)
+	go a.stream(req.ID, entry, stdout, true)
+	go a.stream(req.ID, entry, stderr, false)
 	go a.keepalive(req.ID, entry)
 	finishSessionConnect(func() { a.signalConnected(req.ID) }, a.connectFollowUps)
 	if len(notes) > 0 && a.ctx != nil {
@@ -333,6 +335,10 @@ func dialSSH(req ConnectionRequest, config *ssh.ClientConfig) (*ssh.Client, erro
 	connection, err := dialConnection(req, target)
 	if err != nil {
 		return nil, err
+	}
+	if tcp, ok := connection.(*net.TCPConn); ok {
+		_ = tcp.SetKeepAlive(true)
+		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
 	}
 	sshConn, channels, requests, err := ssh.NewClientConn(connection, target, config)
 	if err != nil {
@@ -479,33 +485,47 @@ func bridgeConnections(left, right net.Conn) {
 	<-done
 }
 
-func (a *App) stream(id string, session *desktopSession, reader io.Reader) {
+func (a *App) stream(id string, session *desktopSession, reader io.Reader, signalClosed bool) {
 	buffer := make([]byte, 8192)
 	for {
 		n, err := reader.Read(buffer)
-		if n > 0 {
+		if n > 0 && a.ctx != nil {
 			runtime.EventsEmit(a.ctx, "ssh:output", id, string(buffer[:n]))
 		}
 		if err != nil {
 			break
 		}
 	}
-	session.notify.Do(func() { runtime.EventsEmit(a.ctx, "ssh:closed", id) })
+	if signalClosed && a.ctx != nil {
+		session.notify.Do(func() { runtime.EventsEmit(a.ctx, "ssh:closed", id) })
+	}
 }
 
 func (a *App) keepalive(id string, session *desktopSession) {
-	ticker := time.NewTicker(20 * time.Second)
+	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
+	misses := 0
 	for {
 		select {
 		case <-session.done:
 			return
 		case <-ticker.C:
-			if _, _, err := session.client.SendRequest("keepalive@openssh.com", true, nil); err != nil {
-				session.notify.Do(func() { runtime.EventsEmit(a.ctx, "ssh:closed", id) })
-				session.stop()
-				return
+			_, _, err := session.client.SendRequest("keepalive@openssh.com", true, nil)
+			if err == nil {
+				misses = 0
+				continue
 			}
+			misses++
+			if misses < 3 {
+				continue
+			}
+			session.notify.Do(func() {
+				if a.ctx != nil {
+					runtime.EventsEmit(a.ctx, "ssh:closed", id)
+				}
+			})
+			session.stop()
+			return
 		}
 	}
 }
@@ -1651,6 +1671,10 @@ func (s *desktopSession) stop() {
 		}
 		if s.session != nil {
 			s.session.Close()
+		}
+		if s.shareKey != "" && s.app != nil {
+			s.app.clients.Release(s.shareKey)
+			return
 		}
 		if s.client != nil {
 			s.client.Close()
