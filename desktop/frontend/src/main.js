@@ -261,7 +261,7 @@ $('#terminal').addEventListener('contextmenu',event=>{
       if(text&&targetSession&&targetSession===sessionId){trackTerminalInput(targetSession,text);await Input(targetSession,text)}
     }
     if(action==='selectAll') term.selectAll();
-    if(action==='clear'){term.clear();const state=sshSessions.get(sessionId);if(state)state.output=''}
+    if(action==='clear'){term.clear();const state=sshSessions.get(sessionId);if(state){state.outputChunks=[];state.outputBytes=0}}
     if(action==='services') openServiceManager();
     if(!terminalCopyMode) term.focus();
   });
@@ -385,7 +385,8 @@ async function activateSession(id){
   $('#sessionTitle').textContent=`${state.saved.name} - ${state.saved.username}@${state.saved.host}`;
   setStatus(state.connected?'已连接':'已断开',state.connected?'#73daca':'#8996aa');
   term.reset();
-  if(state.output) term.write(state.output);
+  const replay=sessionOutputText(state);
+  if(replay) term.write(replay);
   term.focus();
   fit.fit();
   renderSessionTabs();
@@ -565,11 +566,35 @@ async function connectWithTrust(request){
   }
 }
 
+function appendSessionOutput(state,data){
+  if(!state.outputChunks) state.outputChunks=[];
+  state.outputChunks.push(data);
+  state.outputBytes=(state.outputBytes||0)+data.length;
+  while(state.outputBytes>262144&&state.outputChunks.length>1){
+    state.outputBytes-=state.outputChunks[0].length;
+    state.outputChunks.shift();
+  }
+}
+function sessionOutputText(state){
+  return (state.outputChunks||[]).join('');
+}
+let terminalWriteFrame=0;
+const terminalWrites=new Map();
+function queueTerminalWrite(id,data){
+  terminalWrites.set(id,(terminalWrites.get(id)||'')+data);
+  if(terminalWriteFrame) return;
+  terminalWriteFrame=requestAnimationFrame(()=>{
+    terminalWriteFrame=0;
+    const chunk=terminalWrites.get(sessionId)||'';
+    terminalWrites.clear();
+    if(chunk) term.write(chunk);
+  });
+}
 EventsOn('ssh:output',(id,data)=>{
   const state=sshSessions.get(id);
   if(!state) return;
-  state.output=(state.output+data).slice(-2000000);
-  if(id===sessionId) term.write(data);
+  appendSessionOutput(state,data);
+  if(id===sessionId) queueTerminalWrite(id,data);
 });
 EventsOn('ssh:connected',id=>{
   const state=sshSessions.get(id);
@@ -1688,12 +1713,9 @@ function countVisibleFileRows(){
 }
 
 function startStatsRefresh(displayName){
-  if(statsTimer){
-    clearInterval(statsTimer);
-    statsTimer=0;
-  }
+  stopStatsRefresh();
   $('.server-name').textContent=displayName||'当前服务器';
-  loadServerStats();
+  statsDelay=window.setTimeout(loadServerStats,4000);
   statsTimer=window.setInterval(loadServerStats,15000);
 }
 
@@ -1702,8 +1724,14 @@ function stopStatsRefresh(){
     clearInterval(statsTimer);
     statsTimer=0;
   }
+  if(statsDelay){
+    clearTimeout(statsDelay);
+    statsDelay=0;
+  }
   statsFlight=null;
 }
+
+let statsDelay=0;
 
 let statsFlight=null;
 

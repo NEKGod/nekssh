@@ -263,7 +263,11 @@ func (a *App) Connect(req ConnectionRequest) error {
 		client.Close()
 		return err
 	}
-	if err = shell.RequestPty("xterm-256color", req.Rows, req.Cols, ssh.TerminalModes{ssh.ECHO: 1}); err != nil {
+	if err = shell.RequestPty("xterm-256color", req.Rows, req.Cols, ssh.TerminalModes{
+		ssh.ECHO:          1,
+		ssh.TTY_OP_ISPEED: 14400,
+		ssh.TTY_OP_OSPEED: 14400,
+	}); err != nil {
 		shell.Close()
 		client.Close()
 		return err
@@ -486,18 +490,73 @@ func bridgeConnections(left, right net.Conn) {
 }
 
 func (a *App) stream(id string, session *desktopSession, reader io.Reader, signalClosed bool) {
-	buffer := make([]byte, 8192)
+	chunks := make(chan []byte, 128)
+	go a.writeTerminal(id, session, chunks, signalClosed)
+	buffer := make([]byte, 32768)
 	for {
 		n, err := reader.Read(buffer)
-		if n > 0 && a.ctx != nil {
-			runtime.EventsEmit(a.ctx, "ssh:output", id, string(buffer[:n]))
+		if n > 0 {
+			copied := make([]byte, n)
+			copy(copied, buffer[:n])
+			chunks <- copied
 		}
 		if err != nil {
-			break
+			close(chunks)
+			return
 		}
 	}
-	if signalClosed && a.ctx != nil {
-		session.notify.Do(func() { runtime.EventsEmit(a.ctx, "ssh:closed", id) })
+}
+
+func (a *App) writeTerminal(id string, session *desktopSession, chunks <-chan []byte, signalClosed bool) {
+	pending := make([]byte, 0, 32768)
+	timer := time.NewTimer(time.Hour)
+	timer.Stop()
+	armed := false
+	flush := func() {
+		if len(pending) == 0 || a.ctx == nil {
+			pending = pending[:0]
+			return
+		}
+		runtime.EventsEmit(a.ctx, "ssh:output", id, string(pending))
+		pending = pending[:0]
+	}
+	stopTimer := func() {
+		if !armed {
+			return
+		}
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		armed = false
+	}
+	for {
+		select {
+		case data, ok := <-chunks:
+			if !ok {
+				stopTimer()
+				flush()
+				if signalClosed && a.ctx != nil {
+					session.notify.Do(func() { runtime.EventsEmit(a.ctx, "ssh:closed", id) })
+				}
+				return
+			}
+			pending = append(pending, data...)
+			if len(pending) >= 32768 {
+				stopTimer()
+				flush()
+				continue
+			}
+			if !armed {
+				timer.Reset(8 * time.Millisecond)
+				armed = true
+			}
+		case <-timer.C:
+			armed = false
+			flush()
+		}
 	}
 }
 
@@ -510,7 +569,7 @@ func (a *App) keepalive(id string, session *desktopSession) {
 		case <-session.done:
 			return
 		case <-ticker.C:
-			_, _, err := session.client.SendRequest("keepalive@openssh.com", true, nil)
+			_, _, err := session.client.SendRequest("keepalive@openssh.com", false, nil)
 			if err == nil {
 				misses = 0
 				continue
