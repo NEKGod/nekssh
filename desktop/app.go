@@ -66,6 +66,7 @@ type desktopSession struct {
 	reflectMu        sync.Mutex
 	reflectListener  net.Listener
 	reflectMore      []net.Listener
+	localForwards    []net.Listener
 }
 
 type sharedForward struct {
@@ -182,6 +183,7 @@ func NewApp() *App {
 func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 	a.startReflectServer()
+	a.startServerControl()
 }
 
 func (a *App) SelectPrivateKeyFile() (PrivateKeyFile, error) {
@@ -1738,6 +1740,7 @@ func (s *desktopSession) stop() {
 	s.close.Do(func() {
 		close(s.done)
 		s.closeReflect()
+		s.closeLocalForwards()
 		if s.app != nil {
 			s.app.releaseForwards(s)
 		}

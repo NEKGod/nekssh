@@ -84,6 +84,7 @@ func (a *App) serveReflect(id string, session *desktopSession) {
 func (a *App) reflectMux(sessionID string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) { a.reflectIndex(w, r) })
+	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) { reflectDocs(w, r) })
 	mux.HandleFunc("POST /v1/files", func(w http.ResponseWriter, r *http.Request) { a.reflectWriteFiles(w, r) })
 	mux.HandleFunc("POST /v1/run", func(w http.ResponseWriter, r *http.Request) { a.reflectRun(sessionID, w, r) })
 	mux.HandleFunc("GET /v1/jobs", func(w http.ResponseWriter, r *http.Request) { a.reflectJobs(w, r) })
@@ -99,6 +100,7 @@ func (a *App) reflectIndex(w http.ResponseWriter, r *http.Request) {
 		"ok":        true,
 		"port":      neksshReflectPort,
 		"workspace": workspace,
+		"docs": "GET /docs",
 		"usage": map[string]string{
 			"writeFiles": `POST /v1/files {"files":[{"path":"app.py","content":"print(1)"}]}`,
 			"run":        `POST /v1/run {"command":"python app.py","port":3000}`,
@@ -108,6 +110,80 @@ func (a *App) reflectIndex(w http.ResponseWriter, r *http.Request) {
 		},
 	})
 }
+
+func reflectDocs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	io.WriteString(w, reflectDocumentation)
+}
+
+const reflectDocumentation = `NekSSH 客户机控制口
+==================
+
+这个地址在 SSH 服务器的 127.0.0.1:18765。请求会回到正在连接的 NekSSH 客户机。
+客户机是 Windows。命令由 cmd.exe /c 执行。文件写在客户机 NekSSH.exe 旁边的 workspace 目录。
+
+先确认在线
+----------
+
+curl -fsS http://127.0.0.1:18765/
+
+返回 JSON 里 service 为 nekssh 且 ok 为 true 才能继续。连不上就让用户先在 NekSSH 里连上这台服务器。不要改在服务器上把服务启动起来充数。
+
+写文件
+------
+
+路径相对于 workspace，用 / 分隔，不能包含 .. 。
+文本放 content。二进制放 contentBase64，不要同时依赖 content。
+
+curl -fsS http://127.0.0.1:18765/v1/files \
+  -H "Content-Type: application/json" \
+  -d "{\"files\":[{\"path\":\"server.py\",\"content\":\"print(1)\"}]}"
+
+也接受单个文件：{"path":"server.py","content":"..."}
+
+成功返回 {"ok":true,"files":["server.py"]}。
+
+运行并反射端口
+--------------
+
+command 在 workspace 里执行。port 是程序在客户机上监听的端口。
+程序应监听 127.0.0.1，并优先读取环境变量 PORT。
+反射成功后，服务器上用同一个端口访问，地址形如 http://127.0.0.1:3000/ 。
+
+curl -fsS http://127.0.0.1:18765/v1/run \
+  -H "Content-Type: application/json" \
+  -d "{\"command\":\"python -u server.py\",\"port\":3000}"
+
+成功时 ok 为 true，并包含：
+- id：任务编号，例如 job-1
+- pid：客户机进程号
+- local：客户机地址
+- remote：服务器上的访问地址
+
+存在 reflectError 就是反射失败。先看日志，再停止任务，不要告诉用户已经可以访问。
+不需要反射端口时省略 port，只在客户机执行命令。
+
+日志、状态、停止
+----------------
+
+curl -fsS http://127.0.0.1:18765/v1/jobs
+curl -fsS http://127.0.0.1:18765/v1/jobs/job-1
+curl -fsS http://127.0.0.1:18765/v1/jobs/job-1/log
+curl -fsS -X POST http://127.0.0.1:18765/v1/jobs/job-1/stop
+
+停止会结束该任务在客户机上的整个进程树。
+
+约束
+----
+
+- 只使用 127.0.0.1:18765 这个控制口，不要扫描别的端口。
+- 18765 是控制口，不要拿来跑你的业务服务。
+- 业务端口同一时间只反射一次。被占用就换一个大于 1024 的端口再运行。
+- 文件只写进 workspace。命令只做用户要求的那件事。
+- remote 地址只在这台服务器本机可用，不要把它写成公网地址。
+
+客户机上的 127.0.0.1:18766 用来反过来控制这台服务器：执行命令、写文件、把服务器端口接到客户机。说明见客户机的 http://127.0.0.1:18766/docs 。
+`
 
 type reflectFile struct {
 	Path          string `json:"path"`

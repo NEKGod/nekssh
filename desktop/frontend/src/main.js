@@ -613,8 +613,8 @@ function showReflect(address,error){
   const info=$('#reflectInfo');
   if(address){
     info.hidden=false;
-    info.textContent=`反射 http://${address}`;
-    info.title='服务器上的程序访问这个地址即可调用本机。写入文件 POST /v1/files，运行并反射端口 POST /v1/run';
+    info.textContent=`反射 http://${address} · 控制服务器 http://127.0.0.1:18766`;
+    info.title='服务器看 http://127.0.0.1:18765/docs 。客户机看 http://127.0.0.1:18766/docs';
     return;
   }
   if(error){

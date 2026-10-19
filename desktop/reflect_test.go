@@ -23,8 +23,17 @@ func TestReflectAgentWritesFileAndRunsCommand(t *testing.T) {
 	}
 	defer index.Body.Close()
 	indexBody, _ := io.ReadAll(index.Body)
-	if index.StatusCode != http.StatusOK || !strings.Contains(string(indexBody), "/v1/run") {
+	if index.StatusCode != http.StatusOK || !strings.Contains(string(indexBody), "/v1/run") || !strings.Contains(string(indexBody), "/docs") {
 		t.Fatalf("index %d %s", index.StatusCode, indexBody)
+	}
+	docs, err := http.Get(server.URL + "/docs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer docs.Body.Close()
+	docsBody, _ := io.ReadAll(docs.Body)
+	if docs.StatusCode != http.StatusOK || !strings.Contains(string(docsBody), "/v1/run") || !strings.Contains(string(docsBody), "workspace") {
+		t.Fatalf("docs %d %s", docs.StatusCode, docsBody)
 	}
 
 	write, err := http.Post(server.URL+"/v1/files", "application/json", strings.NewReader(`{"path":"hello.txt","content":"nekssh"}`))
