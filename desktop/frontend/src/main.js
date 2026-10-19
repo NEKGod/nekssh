@@ -65,7 +65,7 @@ document.querySelector('#app').innerHTML = `
     </div>
   </aside>
   <main>
-    <header><div class="top-left"><button id="hostMenuButton">连接列表</button><button id="transferButton">传输列表 <b id="transferBadge" hidden>0</b></button><button id="commandHistoryButton">命令历史</button><span id="sessionTitle">未连接</span></div><button id="debugButton" type="button">调试日志</button><span id="status">● 就绪</span></header>
+    <header><div class="top-left"><button id="hostMenuButton">连接列表</button><button id="transferButton">传输列表 <b id="transferBadge" hidden>0</b></button><button id="commandHistoryButton">命令历史</button><span id="sessionTitle">未连接</span><span id="reflectInfo" hidden></span></div><button id="debugButton" type="button">调试日志</button><span id="status">● 就绪</span></header>
     <div id="sessionTabs"><div class="tabs-empty">暂无连接</div></div>
     <div id="hostMenu" hidden>
       <div class="host-menu-head"><b>连接列表</b><button id="newConnection" class="primary">新建连接</button></div>
@@ -391,11 +391,13 @@ async function activateSession(id){
   fit.fit();
   renderSessionTabs();
   if(state.connected){
+    showReflect(state.reflectAddress,state.reflectError);
     loadFiles(currentPath);
     startStatsRefresh(state.saved.name);
   }else{
     stopStatsRefresh();
     resetStatsPanel();
+    showReflect('','');
   }
 }
 
@@ -606,6 +608,33 @@ EventsOn('forward:notice',(id,message)=>{
   const state=sshSessions.get(id);
   if(state) state.forwardNote=message;
   if(id===sessionId)setStatus(message,'#e0af68');
+});
+function showReflect(address,error){
+  const info=$('#reflectInfo');
+  if(address){
+    info.hidden=false;
+    info.textContent=`反射 http://${address}`;
+    info.title='服务器上的程序访问这个地址即可调用本机。写入文件 POST /v1/files，运行并反射端口 POST /v1/run';
+    return;
+  }
+  if(error){
+    info.hidden=false;
+    info.textContent='反射未建立';
+    info.title=error;
+    return;
+  }
+  info.hidden=true;
+  info.textContent='';
+}
+EventsOn('reflect:ready',(id,address)=>{
+  const state=sshSessions.get(id);
+  if(state){state.reflectAddress=address;state.reflectError=''}
+  if(id===sessionId) showReflect(address,'');
+});
+EventsOn('reflect:notice',(id,message)=>{
+  const state=sshSessions.get(id);
+  if(state) state.reflectError=message;
+  if(id===sessionId) showReflect('',message);
 });
 EventsOn('ssh:closed',id=>{
   const state=sshSessions.get(id);

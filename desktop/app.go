@@ -45,6 +45,10 @@ type App struct {
 	statsRuns        statsRunGate
 	connectFollowUps []func()
 	clients          clientPool
+	reflectServer    *http.Server
+	jobMu            sync.Mutex
+	jobs             map[string]*clientJob
+	jobSeq           int
 }
 
 type desktopSession struct {
@@ -57,8 +61,11 @@ type desktopSession struct {
 	notify      sync.Once
 	done        chan struct{}
 	app         *App
-	forwardKeys []string
-	shareKey    string
+	forwardKeys      []string
+	shareKey         string
+	reflectMu        sync.Mutex
+	reflectListener  net.Listener
+	reflectMore      []net.Listener
 }
 
 type sharedForward struct {
@@ -172,7 +179,10 @@ func (writer *progressWriter) emit(status string) {
 func NewApp() *App {
 	return &App{sessions: make(map[string]*desktopSession), pendingKeys: make(map[string]ssh.PublicKey), forwards: make(map[string]*sharedForward)}
 }
-func (a *App) startup(ctx context.Context) { a.ctx = ctx }
+func (a *App) startup(ctx context.Context) {
+	a.ctx = ctx
+	a.startReflectServer()
+}
 
 func (a *App) SelectPrivateKeyFile() (PrivateKeyFile, error) {
 	filePath, err := runtime.OpenFileDialog(a.ctx, runtime.OpenDialogOptions{Title: "选择 SSH 私钥文件", Filters: []runtime.FileFilter{{DisplayName: "SSH 私钥", Pattern: "*.pem;*.key;id_rsa;id_ed25519;id_ecdsa;*"}}})
@@ -219,6 +229,10 @@ func (a *App) UnprotectSecret(value string) (string, error) {
 	return string(plain), nil
 }
 func (a *App) shutdown(ctx context.Context) {
+	a.stopAllJobs()
+	if a.reflectServer != nil {
+		a.reflectServer.Close()
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	for _, session := range a.sessions {
@@ -312,6 +326,7 @@ func (a *App) Connect(req ConnectionRequest) error {
 	go a.stream(req.ID, entry, stdout, true)
 	go a.stream(req.ID, entry, stderr, false)
 	go a.keepalive(req.ID, entry)
+	go a.serveReflect(req.ID, entry)
 	finishSessionConnect(func() { a.signalConnected(req.ID) }, a.connectFollowUps)
 	if len(notes) > 0 && a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "forward:notice", req.ID, strings.Join(notes, "；"))
@@ -1722,6 +1737,7 @@ func (a *App) getSession(id string) (*desktopSession, error) {
 func (s *desktopSession) stop() {
 	s.close.Do(func() {
 		close(s.done)
+		s.closeReflect()
 		if s.app != nil {
 			s.app.releaseForwards(s)
 		}
