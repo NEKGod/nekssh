@@ -127,6 +127,26 @@ term.loadAddon(fit);
 term.loadAddon(search);
 term.open($('#terminal'));
 
+let alternateScreenWheelDelta=0;
+term.attachCustomWheelEventHandler(event=>{
+  if(term.buffer.active.type!=='alternate'||term.modes.mouseTrackingMode!=='none'||terminalCopyMode||event.ctrlKey||event.altKey||event.metaKey) return true;
+  if(!sessionId||event.deltaY===0) return false;
+  const unit=event.deltaMode===WheelEvent.DOM_DELTA_LINE?16:event.deltaMode===WheelEvent.DOM_DELTA_PAGE?term.rows*16:1;
+  const delta=event.deltaY*unit;
+  if(alternateScreenWheelDelta&&Math.sign(alternateScreenWheelDelta)!==Math.sign(delta)) alternateScreenWheelDelta=0;
+  alternateScreenWheelDelta+=delta;
+  const steps=Math.min(6,Math.trunc(Math.abs(alternateScreenWheelDelta)/40));
+  if(steps){
+    alternateScreenWheelDelta-=Math.sign(alternateScreenWheelDelta)*steps*40;
+    const prefix=term.modes.applicationCursorKeysMode?'\x1bO':'\x1b[';
+    const data=(prefix+(delta<0?'A':'B')).repeat(steps);
+    trackTerminalInput(sessionId,data);
+    Input(sessionId,data);
+  }
+  event.preventDefault();
+  return false;
+});
+
 let sessionId = '', currentPath = '.', editingIndex = -1;
 const sshSessions=new Map();
 let hosts = JSON.parse(localStorage.getItem('nekssh.desktop.hosts') || '[]');
