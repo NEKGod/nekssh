@@ -251,7 +251,8 @@ term.onData(data=>{
   trackTerminalInput(sessionId,data);
   Input(sessionId,data);
 });
-term.onResize(({cols,rows})=>sessionId&&Resize(sessionId,cols,rows));
+let suppressTerminalResize=false;
+term.onResize(({cols,rows})=>{if(!suppressTerminalResize&&sessionId)Resize(sessionId,cols,rows)});
 new ResizeObserver(()=>fit.fit()).observe($('#terminal'));
 
 function setTerminalCopyMode(enabled){
@@ -1542,30 +1543,34 @@ function initFileResize(){
       setFilePanelHeight(savedHeight);
     }
   }).observe(workspace);
+  let dragging=false;
+  const move=event=>{
+    if(!dragging) return;
+    const rect=workspace.getBoundingClientRect();
+    setFilePanelHeight(rect.bottom-event.clientY,false);
+  };
+  const end=()=>{
+    if(!dragging) return;
+    dragging=false;
+    document.body.classList.remove('resizing-files');
+    localStorage.setItem('nekssh.desktop.files.height',String(Math.round(files.getBoundingClientRect().height)));
+    suppressTerminalResize=false;
+    fit.fit();
+  };
   handle.addEventListener('pointerdown',event=>{
+    if(event.button!==0) return;
     event.preventDefault();
-    handle.setPointerCapture(event.pointerId);
+    dragging=true;
+    suppressTerminalResize=true;
     document.body.classList.add('resizing-files');
-    const move=moveEvent=>{
-      const rect=workspace.getBoundingClientRect();
-      setFilePanelHeight(rect.bottom-moveEvent.clientY);
-    };
-    const up=upEvent=>{
-      handle.releasePointerCapture(upEvent.pointerId);
-      document.body.classList.remove('resizing-files');
-      localStorage.setItem('nekssh.desktop.files.height',String(Math.round(files.getBoundingClientRect().height)));
-      handle.removeEventListener('pointermove',move);
-      handle.removeEventListener('pointerup',up);
-      handle.removeEventListener('pointercancel',up);
-      fit.fit();
-    };
-    handle.addEventListener('pointermove',move);
-    handle.addEventListener('pointerup',up);
-    handle.addEventListener('pointercancel',up);
   });
+  window.addEventListener('pointermove',move);
+  window.addEventListener('pointerup',end);
+  window.addEventListener('pointercancel',end);
+  window.addEventListener('blur',end);
 }
 
-function setFilePanelHeight(height){
+function setFilePanelHeight(height,refit=true){
   const workspace=$('#workspace');
   const total=workspace.getBoundingClientRect().height;
   if(!total) return;
@@ -1573,7 +1578,7 @@ function setFilePanelHeight(height){
   const maxFiles=Math.max(minFiles,total-handleHeight-minTerminal);
   const filesHeight=Math.min(Math.max(height,minFiles),maxFiles);
   workspace.style.gridTemplateRows=`minmax(${minTerminal}px, 1fr) ${handleHeight}px ${filesHeight}px`;
-  fit.fit();
+  if(refit) fit.fit();
 }
 
 function initSearchBox(){
