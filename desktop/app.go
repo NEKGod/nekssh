@@ -57,6 +57,8 @@ type desktopSession struct {
 	session     *ssh.Session
 	stdin       io.WriteCloser
 	sftp        *sftp.Client
+	sftpMu      sync.Mutex
+	sftpReady   bool
 	close       sync.Once
 	notify      sync.Once
 	done        chan struct{}
@@ -296,12 +298,43 @@ func (a *App) Connect(req ConnectionRequest) error {
 		client.Close()
 		return err
 	}
-	sftpClient, _ := sftp.NewClient(client)
-	entry := &desktopSession{host: req.Host, client: client, session: shell, stdin: stdin, sftp: sftpClient, done: make(chan struct{}), app: a}
-	var notes []string
+	entry := &desktopSession{host: req.Host, client: client, session: shell, stdin: stdin, done: make(chan struct{}), app: a}
+	a.mu.Lock()
+	if old := a.sessions[req.ID]; old != nil {
+		old.stop()
+	}
+	a.sessions[req.ID] = entry
+	a.mu.Unlock()
+	go a.stream(req.ID, entry, stdout, true)
+	go a.stream(req.ID, entry, stderr, false)
+	go a.keepalive(req.ID, entry)
+	finishSessionConnect(func() { a.signalConnected(req.ID) }, a.connectFollowUps)
+	go a.finishSessionSetup(req, entry)
+	return nil
+}
+
+func (a *App) finishSessionSetup(req ConnectionRequest, entry *desktopSession) {
+	select {
+	case <-entry.done:
+		return
+	default:
+	}
+	sftpClient, err := sftp.NewClient(entry.client)
+	if err != nil || sftpClient == nil {
+		debugf("sftp: %v", err)
+		entry.markSFTPReady(nil)
+	} else {
+		entry.markSFTPReady(sftpClient)
+	}
+	select {
+	case <-entry.done:
+		return
+	default:
+	}
 	if req.ListenPort > 0 && req.TargetHost != "" && req.TargetPort > 0 {
 		req.Forwards = append(req.Forwards, LocalForward{Name: "本地转发", ListenAddress: req.ListenAddress, ListenPort: req.ListenPort, TargetHost: req.TargetHost, TargetPort: req.TargetPort, Enabled: true})
 	}
+	var notes []string
 	for _, forward := range req.Forwards {
 		if !forward.Enabled {
 			continue
@@ -319,21 +352,26 @@ func (a *App) Connect(req ConnectionRequest) error {
 			notes = append(notes, note)
 		}
 	}
-	a.mu.Lock()
-	if old := a.sessions[req.ID]; old != nil {
-		old.stop()
-	}
-	a.sessions[req.ID] = entry
-	a.mu.Unlock()
-	go a.stream(req.ID, entry, stdout, true)
-	go a.stream(req.ID, entry, stderr, false)
-	go a.keepalive(req.ID, entry)
-	go a.serveReflect(req.ID, entry)
-	finishSessionConnect(func() { a.signalConnected(req.ID) }, a.connectFollowUps)
 	if len(notes) > 0 && a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "forward:notice", req.ID, strings.Join(notes, "；"))
 	}
-	return nil
+	a.serveReflect(req.ID, entry)
+}
+
+func (s *desktopSession) markSFTPReady(client *sftp.Client) {
+	s.sftpMu.Lock()
+	defer s.sftpMu.Unlock()
+	select {
+	case <-s.done:
+		if client != nil {
+			client.Close()
+		}
+		s.sftpReady = true
+		return
+	default:
+	}
+	s.sftp = client
+	s.sftpReady = true
 }
 
 func (a *App) reusableClient(id string) bool {
@@ -351,22 +389,51 @@ func (a *App) signalConnected(id string) {
 
 var openSSH = dialSSH
 
+const sshClientVersion = "SSH-2.0-OpenSSH_9.6"
+
 func dialSSH(req ConnectionRequest, config *ssh.ClientConfig) (*ssh.Client, error) {
+	var last error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			time.Sleep(400 * time.Millisecond)
+		}
+		client, err := dialSSHOnce(req, config)
+		if err == nil {
+			return client, nil
+		}
+		last = err
+		if !handshakeClosed(err) {
+			return nil, err
+		}
+		debugf("ssh handshake closed, retry %d: %v", attempt+1, err)
+	}
+	return nil, last
+}
+
+func dialSSHOnce(req ConnectionRequest, config *ssh.ClientConfig) (*ssh.Client, error) {
 	target := net.JoinHostPort(req.Host, strconv.Itoa(req.Port))
 	connection, err := dialConnection(req, target)
 	if err != nil {
+		return nil, err
+	}
+	prepared := *config
+	if prepared.ClientVersion == "" {
+		prepared.ClientVersion = sshClientVersion
+	}
+	sshConn, channels, requests, err := ssh.NewClientConn(connection, target, &prepared)
+	if err != nil {
+		connection.Close()
 		return nil, err
 	}
 	if tcp, ok := connection.(*net.TCPConn); ok {
 		_ = tcp.SetKeepAlive(true)
 		_ = tcp.SetKeepAlivePeriod(30 * time.Second)
 	}
-	sshConn, channels, requests, err := ssh.NewClientConn(connection, target, config)
-	if err != nil {
-		connection.Close()
-		return nil, err
-	}
 	return ssh.NewClient(sshConn, channels, requests), nil
+}
+
+func handshakeClosed(err error) bool {
+	return err != nil && (errors.Is(err, io.EOF) || strings.Contains(err.Error(), "handshake failed: EOF"))
 }
 
 func dialConnection(req ConnectionRequest, target string) (net.Conn, error) {
@@ -407,7 +474,8 @@ func dialHTTPProxy(req ConnectionRequest, target string) (net.Conn, error) {
 		connection.Close()
 		return nil, err
 	}
-	response, err := http.ReadResponse(bufio.NewReader(connection), &http.Request{Method: http.MethodConnect})
+	reader := bufio.NewReader(connection)
+	response, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
 	if err != nil {
 		connection.Close()
 		return nil, err
@@ -416,7 +484,16 @@ func dialHTTPProxy(req ConnectionRequest, target string) (net.Conn, error) {
 		connection.Close()
 		return nil, fmt.Errorf("HTTP 代理连接失败: %s", response.Status)
 	}
-	return connection, nil
+	return &prefixConn{Conn: connection, reader: reader}, nil
+}
+
+type prefixConn struct {
+	net.Conn
+	reader io.Reader
+}
+
+func (c *prefixConn) Read(p []byte) (int, error) {
+	return c.reader.Read(p)
 }
 
 func (a *App) registerForward(session *desktopSession, listenAddress string, rule LocalForward) (string, error) {
@@ -497,6 +574,10 @@ func (a *App) releaseForwards(session *desktopSession) {
 	session.forwardKeys = nil
 }
 
+func encodeTerminalChunk(data []byte) string {
+	return base64.StdEncoding.EncodeToString(data)
+}
+
 func bridgeConnections(left, right net.Conn) {
 	defer left.Close()
 	defer right.Close()
@@ -534,7 +615,7 @@ func (a *App) writeTerminal(id string, session *desktopSession, chunks <-chan []
 			pending = pending[:0]
 			return
 		}
-		runtime.EventsEmit(a.ctx, "ssh:output", id, string(pending))
+		runtime.EventsEmit(a.ctx, "ssh:output", id, encodeTerminalChunk(pending))
 		pending = pending[:0]
 	}
 	stopTimer := func() {
@@ -847,17 +928,23 @@ func (a *App) ListFiles(id, remotePath string) ([]FileEntry, error) {
 	if err != nil {
 		return nil, err
 	}
-	if session.sftp == nil {
+	session.sftpMu.Lock()
+	ready, client := session.sftpReady, session.sftp
+	session.sftpMu.Unlock()
+	if !ready {
+		return nil, errors.New("SFTP 正在启动")
+	}
+	if client == nil {
 		return nil, errors.New("目标服务器不支持 SFTP")
 	}
 	if remotePath == "" {
 		remotePath = "."
 	}
-	resolved, err := session.sftp.RealPath(remotePath)
+	resolved, err := client.RealPath(remotePath)
 	if err != nil {
 		return nil, err
 	}
-	items, err := session.sftp.ReadDir(resolved)
+	items, err := client.ReadDir(resolved)
 	if err != nil {
 		return nil, err
 	}
@@ -1386,7 +1473,7 @@ func (a *App) UploadLocalFile(id, remoteDirectory, sourcePath, operationID strin
 			offset = remoteInfo.Size()
 		}
 	}
-	progress := &progressWriter{app: a, id: operationID, direction: "upload", name: filepath.Base(sourcePath), total: info.Size(), transferred: offset}
+	progress := &progressWriter{app: a, id: operationID, direction: "upload", name: filepath.Base(sourcePath), localPath: sourcePath, total: info.Size(), transferred: offset}
 	if offset == info.Size() {
 		progress.emit("已完成")
 		return nil
@@ -1663,7 +1750,7 @@ func (a *App) ScanHostKey(host string, port int) (string, error) {
 	}
 	defer connection.Close()
 	var captured ssh.PublicKey
-	config := &ssh.ClientConfig{User: "nekssh-key-scan", HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	config := &ssh.ClientConfig{User: "nekssh-key-scan", ClientVersion: sshClientVersion, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		captured = key
 		return errors.New("host key captured")
 	}, Timeout: 8 * time.Second}
@@ -1688,7 +1775,7 @@ func (a *App) ScanConnectionHostKey(req ConnectionRequest) (string, error) {
 	}
 	defer connection.Close()
 	var captured ssh.PublicKey
-	config := &ssh.ClientConfig{User: "nekssh-key-scan", HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
+	config := &ssh.ClientConfig{User: "nekssh-key-scan", ClientVersion: sshClientVersion, HostKeyCallback: func(_ string, _ net.Addr, key ssh.PublicKey) error {
 		captured = key
 		return errors.New("host key captured")
 	}, Timeout: 8 * time.Second}
@@ -1744,9 +1831,13 @@ func (s *desktopSession) stop() {
 		if s.app != nil {
 			s.app.releaseForwards(s)
 		}
+		s.sftpMu.Lock()
 		if s.sftp != nil {
 			s.sftp.Close()
+			s.sftp = nil
 		}
+		s.sftpReady = true
+		s.sftpMu.Unlock()
 		if s.session != nil {
 			s.session.Close()
 		}
@@ -1823,6 +1914,9 @@ func friendlyDesktopError(err error) error {
 	}
 	if strings.Contains(text, "timeout") {
 		return errors.New("连接超时")
+	}
+	if handshakeClosed(err) {
+		return errors.New("服务器在 SSH 握手时关闭了连接。请确认端口上是 SSH 服务；如果刚才连过多次，等几秒再试")
 	}
 	return err
 }

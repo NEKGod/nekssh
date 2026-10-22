@@ -101,6 +101,7 @@ header{height:46px;display:flex;align-items:center;justify-content:space-between
 .transfer-progress i{display:block;height:100%;background:#35b8a0;transition:width .15s linear}
 .transfer-item[data-status="失败"] .transfer-progress i{background:#f7768e}
 .transfer-item[data-status="已完成"] .transfer-progress i{background:#7aa879}
+.transfer-path{margin:-2px 0 4px;overflow:hidden;color:#8fbfb3;font-size:10px;text-overflow:ellipsis;white-space:nowrap}
 .transfer-detail{color:#68758a;font-size:9px}
 .transfer-detail>span:last-child{display:flex;align-items:center;gap:6px}
 .show-in-folder{height:23px;padding:0 7px;border-color:#3a5262;border-radius:3px;background:#1c2c37;color:#9fd5d0;font-size:9px}
@@ -131,6 +132,7 @@ header{height:46px;display:flex;align-items:center;justify-content:space-between
 #fileResizeHandle{background:#202938;border-top:1px solid #303949;border-bottom:1px solid #0b0e14;cursor:ns-resize;touch-action:none}
 #fileResizeHandle:hover,.resizing-files #fileResizeHandle{background:#35b8a0}
 .resizing-files{cursor:ns-resize;user-select:none}
+.resizing-files #terminal,.resizing-files #files{pointer-events:none}
 #files{overflow:auto;background:#0f141d;color:#c8d1df;--wails-drop-target:drop}
 #fileList{outline:0}
 #fileList.keyboard-active{box-shadow:inset 0 0 0 1px #35b8a066}

@@ -71,7 +71,7 @@ document.querySelector('#app').innerHTML = `
       <div class="host-menu-head"><b>连接列表</b><button id="newConnection" class="primary">新建连接</button></div>
       <div id="hosts"></div>
     </div>
-    <div id="transferPanel" hidden><div class="transfer-head"><b>文件传输</b><button id="clearTransfers">清除已完成</button></div><div class="transfer-tabs"><button data-transfer-tab="upload" class="active">上传列表</button><button data-transfer-tab="download">下载列表</button></div><div id="transferList"></div></div>
+    <div id="transferPanel" hidden><div class="transfer-head"><b>文件传输</b><button id="clearTransfers">清除已完成</button></div><div class="transfer-tabs"><button data-transfer-tab="upload">上传列表</button><button data-transfer-tab="download" class="active">下载列表</button></div><div id="transferList"></div></div>
     <div id="commandHistoryPanel" hidden><div class="command-history-head"><b>命令历史</b><button id="clearCommandHistory">刷新</button></div><div class="command-history-search"><input id="commandHistorySearch" placeholder="搜索当前连接的命令"></div><div id="commandHistoryList"></div></div>
     <section id="welcome"><h2>连接 SSH 服务器</h2><p>连接在本机桌面客户端内建立。</p></section>
     <section id="workspace" hidden>
@@ -127,26 +127,6 @@ term.loadAddon(fit);
 term.loadAddon(search);
 term.open($('#terminal'));
 
-let alternateScreenWheelDelta=0;
-term.attachCustomWheelEventHandler(event=>{
-  if(term.buffer.active.type!=='alternate'||term.modes.mouseTrackingMode!=='none'||terminalCopyMode||event.ctrlKey||event.altKey||event.metaKey) return true;
-  if(!sessionId||event.deltaY===0) return false;
-  const unit=event.deltaMode===WheelEvent.DOM_DELTA_LINE?16:event.deltaMode===WheelEvent.DOM_DELTA_PAGE?term.rows*16:1;
-  const delta=event.deltaY*unit;
-  if(alternateScreenWheelDelta&&Math.sign(alternateScreenWheelDelta)!==Math.sign(delta)) alternateScreenWheelDelta=0;
-  alternateScreenWheelDelta+=delta;
-  const steps=Math.min(6,Math.trunc(Math.abs(alternateScreenWheelDelta)/40));
-  if(steps){
-    alternateScreenWheelDelta-=Math.sign(alternateScreenWheelDelta)*steps*40;
-    const prefix=term.modes.applicationCursorKeysMode?'\x1bO':'\x1b[';
-    const data=(prefix+(delta<0?'A':'B')).repeat(steps);
-    trackTerminalInput(sessionId,data);
-    Input(sessionId,data);
-  }
-  event.preventDefault();
-  return false;
-});
-
 let sessionId = '', currentPath = '.', editingIndex = -1;
 const sshSessions=new Map();
 let hosts = JSON.parse(localStorage.getItem('nekssh.desktop.hosts') || '[]');
@@ -164,7 +144,22 @@ let serviceExecutableFile=null,systemdServiceItems=[];
 let commandHistoryIndex=0,filteredCommandHistory=[];
 let terminalCopyMode=false;
 const transfers=new Map();
-let transferTab='upload';
+let transferTab='download';
+const transferStoreKey='nekssh.desktop.transfers';
+function loadStoredTransfers(){
+  try{
+    const saved=JSON.parse(localStorage.getItem(transferStoreKey)||'[]');
+    for(const item of saved){
+      if(!item?.ID||item.Status==='进行中'||item.Status==='续传中') continue;
+      transfers.set(item.ID,item);
+    }
+  }catch(error){console.warn(error)}
+}
+function saveTransfers(){
+  const saved=[...transfers.values()].filter(item=>item.Status==='已完成'||item.Status==='失败').slice(-300);
+  localStorage.setItem(transferStoreKey,JSON.stringify(saved));
+}
+loadStoredTransfers();
 const editorHighlightStyle=HighlightStyle.define([
   {tag:tags.comment,color:'#66788f',fontStyle:'italic'},
   {tag:[tags.keyword,tags.modifier,tags.operatorKeyword],color:'#c792ea'},
@@ -252,8 +247,9 @@ term.onData(data=>{
   Input(sessionId,data);
 });
 let suppressTerminalResize=false;
+let ignoreTerminalFit=false;
 term.onResize(({cols,rows})=>{if(!suppressTerminalResize&&sessionId)Resize(sessionId,cols,rows)});
-new ResizeObserver(()=>fit.fit()).observe($('#terminal'));
+new ResizeObserver(()=>{if(!ignoreTerminalFit) fit.fit()}).observe($('#terminal'));
 
 function setTerminalCopyMode(enabled){
   terminalCopyMode=enabled;
@@ -406,8 +402,8 @@ async function activateSession(id){
   $('#sessionTitle').textContent=`${state.saved.name} - ${state.saved.username}@${state.saved.host}`;
   setStatus(state.connected?'已连接':'已断开',state.connected?'#73daca':'#8996aa');
   term.reset();
-  const replay=sessionOutputText(state);
-  if(replay) term.write(replay);
+  resetTerminalWrite();
+  for(const chunk of state.outputChunks||[]) writeTerminalBytes(chunk);
   term.focus();
   fit.fit();
   renderSessionTabs();
@@ -589,35 +585,53 @@ async function connectWithTrust(request){
   }
 }
 
-function appendSessionOutput(state,data){
+function decodeTerminalBytes(data){
+  if(data instanceof Uint8Array) return data;
+  const binary=atob(data||'');
+  const bytes=new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+  return bytes;
+}
+function appendSessionOutput(state,bytes){
   if(!state.outputChunks) state.outputChunks=[];
-  state.outputChunks.push(data);
-  state.outputBytes=(state.outputBytes||0)+data.length;
+  state.outputChunks.push(bytes);
+  state.outputBytes=(state.outputBytes||0)+bytes.length;
   while(state.outputBytes>262144&&state.outputChunks.length>1){
     state.outputBytes-=state.outputChunks[0].length;
     state.outputChunks.shift();
   }
 }
-function sessionOutputText(state){
-  return (state.outputChunks||[]).join('');
+let terminalWriteGeneration=0;
+const terminalQueue=[];
+let terminalWriting=false;
+function resetTerminalWrite(){
+  terminalWriteGeneration++;
+  terminalQueue.length=0;
+  terminalWriting=false;
 }
-let terminalWriteFrame=0;
-const terminalWrites=new Map();
-function queueTerminalWrite(id,data){
-  terminalWrites.set(id,(terminalWrites.get(id)||'')+data);
-  if(terminalWriteFrame) return;
-  terminalWriteFrame=requestAnimationFrame(()=>{
-    terminalWriteFrame=0;
-    const chunk=terminalWrites.get(sessionId)||'';
-    terminalWrites.clear();
-    if(chunk) term.write(chunk);
-  });
+function writeTerminalBytes(bytes){
+  if(!bytes?.length) return;
+  const generation=terminalWriteGeneration;
+  terminalQueue.push(bytes);
+  const drain=()=>{
+    if(generation!==terminalWriteGeneration||terminalWriting) return;
+    const next=terminalQueue.shift();
+    if(!next) return;
+    terminalWriting=true;
+    term.write(next,()=>{
+      if(generation!==terminalWriteGeneration) return;
+      terminalWriting=false;
+      drain();
+    });
+  };
+  drain();
 }
 EventsOn('ssh:output',(id,data)=>{
   const state=sshSessions.get(id);
   if(!state) return;
-  appendSessionOutput(state,data);
-  if(id===sessionId) queueTerminalWrite(id,data);
+  const bytes=decodeTerminalBytes(data);
+  appendSessionOutput(state,bytes);
+  if(id===sessionId) writeTerminalBytes(bytes);
 });
 EventsOn('ssh:connected',id=>{
   const state=sshSessions.get(id);
@@ -665,6 +679,7 @@ EventsOn('ssh:closed',id=>{
 });
 EventsOn('transfer:progress',progress=>{
   transfers.set(progress.ID,{...progress});
+  if(progress.Status==='已完成'||progress.Status==='失败') saveTransfers();
   renderTransfers();
 });
 
@@ -673,9 +688,22 @@ let fileListToken=0;
 async function loadFiles(remotePath){
   const requestedSession=sessionId;
   const token=++fileListToken;
+  let entries;
+  for(let attempt=0;attempt<25;attempt++){
+    try{
+      entries=await ListFiles(requestedSession,remotePath);
+      break;
+    }catch(error){
+      if(String(error).includes('正在启动')&&attempt<24&&requestedSession===sessionId&&token===fileListToken){
+        await new Promise(resolve=>setTimeout(resolve,200));
+        continue;
+      }
+      if(requestedSession===sessionId&&token===fileListToken) alert(String(error));
+      return;
+    }
+  }
   try{
-    const entries=await ListFiles(requestedSession,remotePath);
-    if(requestedSession!==sessionId||token!==fileListToken) return;
+    if(!entries||requestedSession!==sessionId||token!==fileListToken) return;
     currentPath=entries[0]?.Path?.replace(/\/[^/]+$/,'')||remotePath;
     const state=sshSessions.get(requestedSession);
     if(state) state.path=currentPath;
@@ -1554,6 +1582,7 @@ function initFileResize(){
     dragging=false;
     document.body.classList.remove('resizing-files');
     localStorage.setItem('nekssh.desktop.files.height',String(Math.round(files.getBoundingClientRect().height)));
+    ignoreTerminalFit=false;
     suppressTerminalResize=false;
     fit.fit();
   };
@@ -1562,6 +1591,7 @@ function initFileResize(){
     event.preventDefault();
     dragging=true;
     suppressTerminalResize=true;
+    ignoreTerminalFit=true;
     document.body.classList.add('resizing-files');
   });
   window.addEventListener('pointermove',move);
@@ -1824,6 +1854,7 @@ function markTransferFailed(id,direction,error){
   const existing=transfers.get(id);
   if(existing){
     transfers.set(id,{...existing,Status:'失败',Error:String(error)});
+    saveTransfers();
     renderTransfers();
   }else if(String(error)){
     alert(String(error));
@@ -1843,8 +1874,9 @@ function renderTransfers(){
   list.innerHTML=items.map(item=>{
     const percent=item.Total?Math.min(100,item.Transferred*100/item.Total):0;
     const status=item.Status==='失败'?'失败':item.Status==='已完成'?'已完成':`${percent.toFixed(1)}%`;
-    const locationButton=item.Direction==='download'&&item.Status==='已完成'&&item.LocalPath?`<button class="show-in-folder" data-path="${escapeHtml(item.LocalPath)}">打开目录</button>`:'';
-    return `<div class="transfer-item" data-status="${item.Status}"><div class="transfer-info"><b title="${escapeHtml(item.Name)}">${escapeHtml(item.Name)}</b><span>${status}</span></div><div class="transfer-progress"><i style="width:${percent}%"></i></div><div class="transfer-detail"><span>${formatBytes(item.Transferred)} / ${formatBytes(item.Total)}</span><span>${item.Direction==='upload'?'上传':'下载'} ${locationButton}</span></div></div>`;
+    const locationButton=item.LocalPath?`<button class="show-in-folder" data-path="${escapeHtml(item.LocalPath)}">打开位置</button>`:'';
+    const pathLine=item.LocalPath?`<div class="transfer-path" title="${escapeHtml(item.LocalPath)}">${escapeHtml(item.LocalPath)}</div>`:'';
+    return `<div class="transfer-item" data-status="${item.Status}"><div class="transfer-info"><b title="${escapeHtml(item.Name)}">${escapeHtml(item.Name)}</b><span>${status}</span></div><div class="transfer-progress"><i style="width:${percent}%"></i></div>${pathLine}<div class="transfer-detail"><span>${formatBytes(item.Transferred)} / ${formatBytes(item.Total)}</span><span>${item.Direction==='upload'?'上传':'下载'} ${locationButton}</span></div></div>`;
   }).join('');
   list.querySelectorAll('.show-in-folder').forEach(button=>button.onclick=async()=>{
     try{await ShowInFolder(button.dataset.path)}catch(error){alert(String(error))}
@@ -1859,7 +1891,8 @@ document.querySelectorAll('[data-transfer-tab]').forEach(button=>button.onclick=
   renderTransfers();
 });
 $('#clearTransfers').onclick=()=>{
-  for(const [id,item] of transfers) if(item.Status!=='进行中') transfers.delete(id);
+  for(const [id,item] of transfers) if(item.Status!=='进行中'&&item.Status!=='续传中') transfers.delete(id);
+  saveTransfers();
   renderTransfers();
 };
 
