@@ -1,5 +1,6 @@
 import './style.css';
 import './terminal.css';
+import './terminal-prompt.css';
 import './hosts.css';
 import '@xterm/xterm/css/xterm.css';
 import { Terminal } from '@xterm/xterm';
@@ -27,15 +28,23 @@ import { yaml } from '@codemirror/legacy-modes/mode/yaml';
 import { diffLines } from 'diff';
 import 'highlight.js/styles/github-dark.css';
 import { collectMarkdownOutline, renderMarkdown, renderMermaidBlocks } from './markdown-render.js';
-import { CommandHistory, Connect, CreateSystemdService, DeletePath, Disconnect, DownloadDirectory, DownloadFile, FileHistory, Input, IsELF, ListFiles, MakeDirectory, OwnershipOptions, ProtectSecret, ReadFileHistory, ReadRemoteFile, ReadRemoteImage, ReadRemotePDF, RecordFileHistory, Resize, SaveRemoteFile, ScanConnectionHostKey, SelectPrivateKeyFile, ServerPartitions, ServerProcesses, ServerStats, SetPathMode, SetPathOwner, ShowInFolder, SignalProcess, SystemdDaemonReload, SystemdServiceAction, SystemdServicePath, SystemdServices, SetDebug, TrustHostKey, UnprotectSecret, UploadFile, UploadLocalFile } from '../wailsjs/go/main/App.js';
-import { ClipboardGetText, ClipboardSetText, EventsOn, OnFileDrop } from '../wailsjs/runtime/runtime.js';
+import { createServerPanelLoader } from './server-panels.mjs';
+import { initPortPanel } from './ports-panel.mjs';
+import { terminalSkills, skillInput, skillDraft } from './terminal-skills.mjs';
+import { icon } from './ui-icons.mjs';
+import {createSettingsStore,terminalFontStack} from './settings-model.mjs';
+import {initSettingsPanel} from './settings-panel.mjs';
+import {initProjectPanel} from './project-panel.mjs';
+import './workspace-design.css';
+import { CommandHistory, Connect, CreateSystemdService, DeletePath, Disconnect, DownloadDirectory, DownloadFile, FileHistory, Input, IsELF, ListFiles, MakeDirectory, OwnershipOptions, ProtectSecret, ReadFileHistory, ReadRemoteFile, ReadRemoteImage, ReadRemotePDF, RecordFileHistory, Resize, SaveRemoteFile, ScanConnectionHostKey, SelectPrivateKeyFile, ServerPartitions, ServerProcesses, ServerStats, SetPathMode, SetPathOwner, ShowInFolder, SignalProcess, SystemdDaemonReload, SystemdServiceAction, SystemdServicePath, SystemdServices, SetDebug, TrustHostKey, UnprotectSecret, UploadFile, UploadLocalFile, Version } from '../wailsjs/go/main/App.js';
+import { ClipboardGetText, ClipboardSetText, EventsOn, OnFileDrop, WindowSetTitle } from '../wailsjs/runtime/runtime.js';
 
 document.querySelector('#app').innerHTML = `
 <div class="shell">
   <aside>
-    <h1>NekSSH</h1>
+    <div class="brand"><span class="brand-symbol">${icon('terminal')}</span><h1>NekSSH<small id="appVersion"></small></h1><span class="brand-label">WORKSPACE</span></div>
     <div class="side-panel" id="serverPanel">
-      <div class="panel-title"><span>资源列表</span><small class="server-name">未连接</small></div>
+      <div class="panel-title"><span>${icon('activity')}资源概览</span><small class="server-name">未连接</small></div>
       <div class="resource" data-level="idle">
         <div class="resource-head"><span>CPU</span><b id="cpuValue">--</b></div>
         <div class="resource-bar"><i id="cpuBar"></i></div>
@@ -54,18 +63,18 @@ document.querySelector('#app').innerHTML = `
       </div>
     </div>
     <div class="side-panel" id="processPanel">
-      <div class="panel-title"><span>进程列表</span><small>CPU 排序</small></div>
+      <div class="panel-title"><span>${icon('layers')}运行进程</span><small id="processSortLabel">CPU ↓</small></div>
       <div class="process-search"><input id="processSearch" placeholder="搜索进程、PID 或端口"></div>
       <div class="process-head"><button data-process-sort="PID">PID</button><button data-process-sort="CPU">CPU</button><button data-process-sort="Memory">内存</button><button data-process-sort="Command">进程</button></div>
       <div id="processList"><div class="panel-empty">连接后显示进程</div></div>
     </div>
     <div class="side-panel" id="partitionPanel">
-      <div class="panel-title"><span>分区列表</span><small>磁盘空间</small></div>
+      <div class="panel-title"><span>${icon('disk')}磁盘分区</span><small>存储空间</small></div>
       <div id="partitionList"><div class="panel-empty">连接后显示分区</div></div>
     </div>
   </aside>
   <main>
-    <header><div class="top-left"><button id="hostMenuButton">连接列表</button><button id="transferButton">传输列表 <b id="transferBadge" hidden>0</b></button><button id="commandHistoryButton">命令历史</button><span id="sessionTitle">未连接</span><span id="reflectInfo" hidden></span></div><button id="debugButton" type="button">调试日志</button><span id="status">● 就绪</span></header>
+    <header class="workspace-toolbar"><div class="top-left"><button id="sidebarToggle" class="toolbar-icon" type="button" title="收起资源侧栏" aria-label="收起资源侧栏" aria-expanded="true">${icon('sidebar')}</button><span class="toolbar-divider"></span><button id="hostMenuButton">${icon('servers')}<span>连接</span></button><button id="transferButton">${icon('transfer')}<span>传输</span><b id="transferBadge" hidden>0</b></button><button id="commandHistoryButton">${icon('history')}<span>命令历史</span></button><button id="portsButton" disabled>${icon('ports')}<span>端口与穿透</span></button></div><button id="promptButton" disabled>${icon('spark')}<span>提示输入</span></button></header>
     <div id="sessionTabs"><div class="tabs-empty">暂无连接</div></div>
     <div id="hostMenu" hidden>
       <div class="host-menu-head"><b>连接列表</b><button id="newConnection" class="primary">新建连接</button></div>
@@ -73,18 +82,19 @@ document.querySelector('#app').innerHTML = `
     </div>
     <div id="transferPanel" hidden><div class="transfer-head"><b>文件传输</b><button id="clearTransfers">清除已完成</button></div><div class="transfer-tabs"><button data-transfer-tab="upload">上传列表</button><button data-transfer-tab="download" class="active">下载列表</button></div><div id="transferList"></div></div>
     <div id="commandHistoryPanel" hidden><div class="command-history-head"><b>命令历史</b><button id="clearCommandHistory">刷新</button></div><div class="command-history-search"><input id="commandHistorySearch" placeholder="搜索当前连接的命令"></div><div id="commandHistoryList"></div></div>
-    <section id="welcome"><h2>连接 SSH 服务器</h2><p>连接在本机桌面客户端内建立。</p></section>
+    <section id="welcome"><div class="welcome-content"><div class="welcome-mark">${icon('terminal')}</div><span class="welcome-eyebrow">YOUR REMOTE WORKSPACE</span><h2>连接远程，专注当下。</h2><p>终端、文件和 AI 工作流，在一个安静的工作台中协同。</p><div class="welcome-actions"><button id="welcomeConnect" class="primary">${icon('plus')}新建连接</button><button id="welcomeHosts">打开连接列表 ${icon('arrow')}</button></div><div id="welcomeRecent"></div><div class="welcome-features"><div>${icon('terminal')}<b>流畅终端</b><span>为日常开发与终端 AI 准备</span></div><div>${icon('folder')}<b>远程文件</b><span>传输、编辑，一处完成</span></div><div>${icon('ports')}<b>端口与穿透</b><span>连接本机与远端服务</span></div></div><div class="welcome-security">${icon('shield')}SSH 加密连接 · 凭据保存在本机</div></div></section>
     <section id="workspace" hidden>
       <div id="terminal"></div>
       <div id="files">
         <div class="filebar">
-          <div class="file-location"><button id="upDirectory" class="icon-button" title="返回上级">↑</button><button id="pathToggle" class="icon-button" title="输入目录跳转">⌘</button><div id="breadcrumbs"></div><dialog class="path-jump"><div class="path-jump-head"><div><b>跳转到目录</b><span id="pathCurrent">当前目录：.</span></div><button id="pathJumpClose" class="icon-button" title="关闭">×</button></div><div class="path-jump-body"><div class="path-input-wrap"><span>/</span><input id="pathInput" placeholder="例如 /var/www/html"></div><button id="pathGo" class="primary">进入目录</button></div></dialog></div>
-          <div class="file-actions"><span id="fileCount">0 项</span><button id="mkdir">＋ 新建目录</button><button id="upload">↑ 上传</button><button id="refresh" class="icon-button" title="刷新">↻</button></div>
+          <div class="file-location"><span class="file-section-title">${icon('folder')}文件</span><button id="upDirectory" class="icon-button" title="返回上级" aria-label="返回上级">↑</button><button id="pathToggle" class="icon-button" title="输入目录跳转" aria-label="输入目录跳转">/</button><div id="breadcrumbs"></div><dialog class="path-jump"><div class="path-jump-head"><div><b>跳转到目录</b><span id="pathCurrent">当前目录：.</span></div><button id="pathJumpClose" class="icon-button" title="关闭">×</button></div><div class="path-jump-body"><div class="path-input-wrap"><span>/</span><input id="pathInput" placeholder="例如 /var/www/html"></div><button id="pathGo" class="primary">进入目录</button></div></dialog></div>
+          <div class="file-actions"><span id="fileCount">0 项</span><button id="projectNew" type="button" title="在所选文件夹或当前目录中新建项目" aria-label="新建项目">${icon('plus')}<span>新建项目</span></button><button id="mkdir" title="新建目录">${icon('folder')}<span>新建目录</span></button><button id="upload">${icon('upload')}<span>上传</span></button><button id="refresh" class="icon-button" title="刷新" aria-label="刷新文件">${icon('refresh')}</button></div>
         </div>
         <div class="bookmarkbar"><button id="saveBookmark">☆ 保存当前目录</button><button id="bookmarkButton">快捷目录 <span>▾</span></button><dialog id="bookmarkMenu"></dialog></div>
         <div id="fileList" tabindex="0"></div>
       </div>
     </section>
+    <footer class="workspace-statusbar"><span id="status" role="status">● 就绪</span><span id="reflectInfo" hidden></span><span class="statusbar-spacer"></span><span class="statusbar-protocol">SSH / SFTP</span><button id="debugButton" type="button">调试日志</button><button id="settingsButton" type="button" title="设置" aria-label="打开设置">${icon('settings')}<span>设置</span></button></footer>
   </main>
 </div>
 <dialog id="editorDialog"><div class="editor-window">
@@ -100,7 +110,7 @@ document.querySelector('#app').innerHTML = `
   <label class="remember-password"><input name="rememberPassword" type="checkbox"><span>记住密码（Windows 加密存储）</span></label>
   <label>私钥文件<div class="key-file-row"><input name="privateKeyPath" readonly placeholder="未选择私钥文件"><button type="button" id="selectPrivateKey">选择文件</button><button type="button" id="clearPrivateKey">清除</button></div><textarea name="privateKey" hidden></textarea></label>
   <details class="connection-options"><summary>代理服务器</summary><div class="option-body"><label>代理类型<select name="proxyType"><option value="direct">不使用代理</option><option value="socks5">SOCKS5</option><option value="http">HTTP CONNECT</option></select></label><div class="row"><label>代理地址<input name="proxyHost" placeholder="127.0.0.1"></label><label class="port">端口<input name="proxyPort" type="number" value="1080"></label></div><div class="row"><label>代理用户名<input name="proxyUsername"></label><label>代理密码<input name="proxyPassword" type="password"></label></div></div></details>
-  <details class="connection-options"><summary>Listen 本地转发</summary><div class="option-body"><div class="forward-toolbar"><span>转发规则</span><button type="button" id="addForward">＋ 添加规则</button></div><div id="forwardList"><div class="forward-empty">暂无转发规则</div></div></div></details>
+  <details class="connection-options"><summary>端口与穿透 · 自动转发规则</summary><div class="option-body"><div class="forward-toolbar"><span>连接后自动启用，可在「端口与穿透」中查看和停止</span><button type="button" id="addForward">＋ 添加规则</button></div><div id="forwardList"><div class="forward-empty">暂无转发规则</div></div></div></details>
   <div class="actions"><button type="button" id="cancel">取消</button><button type="submit" class="primary">保存并连接</button></div>
 </form></dialog>
 <dialog id="permissionDialog"><div class="permission-window"><div class="permission-head"><div><b>文件属性</b><span id="permissionPath"></span></div><button id="permissionClose" class="icon-button">×</button></div><div class="permission-body"><label>权限<select id="permissionMode"><option value="644">644 · 标准文件</option><option value="600">600 · 私密文件</option><option value="664">664 · 组可写文件</option><option value="755">755 · 标准目录/程序</option><option value="700">700 · 私有目录/程序</option><option value="775">775 · 组可写目录</option><option value="777">777 · 所有人可写</option></select></label><div class="owner-fields"><label>所有者<select id="permissionOwner"></select></label><label>用户组<select id="permissionGroup"></select></label></div><div class="permission-preview"><span>所有者权限</span><span>用户组权限</span><span>其他用户权限</span></div></div><div class="permission-actions"><button id="permissionCancel">取消</button><button id="permissionSave" class="primary">应用属性</button></div></div></dialog>
@@ -110,17 +120,30 @@ document.querySelector('#app').innerHTML = `
 <dialog id="pdfDialog"><div class="image-viewer"><div class="image-toolbar"><div><b id="pdfName">PDF</b><span id="pdfInfo"></span></div><div><button id="pdfDownload">下载</button><button id="pdfClose" class="icon-button" title="关闭">×</button></div></div><iframe id="pdfFrame" title="PDF 预览"></iframe></div></dialog>
 <dialog id="createServiceDialog"><div class="service-create-window"><div class="permission-head"><div><b>创建 systemd 服务</b><span id="serviceExecutable"></span></div><button id="createServiceClose" class="icon-button">×</button></div><div class="service-create-body"><label>服务名称<input id="serviceName" placeholder="my-app"></label><label>描述<input id="serviceDescription" placeholder="My Application"></label><label>启动参数<input id="serviceArguments" placeholder="--config /etc/app.conf"></label><div class="row"><label>运行用户<input id="serviceUser" placeholder="root"></label><label>工作目录<input id="serviceWorkingDirectory"></label></div><label class="remember-password"><input id="serviceEnableNow" type="checkbox" checked><span>创建后设为开机启动并立即运行</span></label></div><div class="permission-actions"><button id="createServiceCancel">取消</button><button id="createServiceSave" class="primary">创建服务</button></div></div></dialog>
 <dialog id="serviceManagerDialog"><div class="service-manager-window"><div class="service-manager-head"><b>systemd 服务</b><input id="serviceSearch" placeholder="搜索服务"><button id="serviceRefresh">刷新</button><button id="serviceManagerClose" class="icon-button">×</button></div><div id="serviceList"></div></div></dialog>
+<dialog id="terminalPromptDialog" aria-labelledby="terminalPromptTitle"><form id="terminalPromptForm" class="terminal-prompt-window">
+  <div class="prompt-header"><div class="prompt-heading"><span class="prompt-heading-icon" aria-hidden="true">⌘</span><div><h2 id="terminalPromptTitle">提示输入</h2><p>把能力说明和任务，一起交给终端里的 AI</p></div></div><button type="button" id="terminalPromptClose" aria-label="关闭">×</button></div>
+  <div class="prompt-layout">
+    <nav class="prompt-library" aria-label="选择技能"><div class="prompt-section-label">选择技能 <span>BUILT-IN</span></div><div class="prompt-skill-list"><button type="button" class="prompt-skill active" data-prompt-skill="" aria-pressed="true"><span class="prompt-skill-icon" aria-hidden="true">✎</span><span><b>自定义输入</b><small>直接编写要发送的内容</small></span><i aria-hidden="true">✓</i></button>${terminalSkills.map((skill,index)=>`<button type="button" class="prompt-skill" data-prompt-skill="${skill.id}" aria-pressed="false"><span class="prompt-skill-icon" aria-hidden="true">${['◎','▷','⇄'][index]||'◇'}</span><span><b>${skill.label}</b><small>${['操作你电脑上的浏览器','把服务放到客户机运行','检查两个方向的连接'][index]||''}</small></span><i aria-hidden="true">✓</i></button>`).join('')}</div><p class="prompt-library-note">适用于 Codex、Claude 等终端 AI<br>无需额外安装技能</p></nav>
+    <div class="prompt-editor"><div class="prompt-context"><span id="terminalPromptBadge">自定义输入</span><span id="terminalPromptTarget"></span></div><p id="terminalSkillDescription">不附加技能说明，只发送你输入的内容。</p><div class="prompt-task-label"><label for="terminalPromptInput">你想让 AI 做什么？</label><span id="terminalPromptCount">0 字</span></div><textarea id="terminalPromptInput" placeholder="输入你的任务或提示词…"></textarea><p class="prompt-editor-hint">只需写任务，选择技能后会自动附上调用方法与注意事项。</p><details id="terminalPromptPreview"><summary>查看完整提示词 <span>自动组合</span></summary><pre id="terminalPromptPreviewText"></pre></details></div>
+  </div>
+  <div class="prompt-footer"><label class="prompt-enter"><input id="terminalPromptEnter" type="checkbox"><span>同时发送回车</span></label><div class="prompt-footer-actions"><button type="button" id="terminalPromptCancel">取消</button><button type="submit" id="terminalPromptSubmit" class="primary" disabled>填入终端 <span aria-hidden="true">→</span></button></div></div>
+</form></dialog>
 <div id="fileContextMenu" hidden></div><div id="tabContextMenu" hidden></div><div id="processContextMenu" hidden></div><div id="terminalContextMenu" hidden></div>`;
 
 const $ = selector => document.querySelector(selector);
+let settingsStorage;try{settingsStorage=window.localStorage}catch{}
+const settingsStore=createSettingsStore(settingsStorage);
+let preferences=settingsStore.get();
 const fit = new FitAddon();
 const search = new SearchAddon();
 const term = new Terminal({
-  cursorBlink:true,
-  scrollback:10000,
-  fontSize:14,
-  fontFamily:'Consolas, Cascadia Mono, monospace',
-  theme:{background:'#080b10',foreground:'#d8dee9',cursor:'#73daca'}
+  cursorBlink:preferences.cursorBlink,
+  cursorStyle:preferences.cursorStyle,
+  scrollback:preferences.scrollback,
+  fontSize:preferences.fontSize,
+  lineHeight:preferences.lineHeight,
+  fontFamily:terminalFontStack(preferences.fontFamily),
+  theme:{background:'#0e141c',foreground:'#d8dee9',cursor:'#73daca'}
 });
 
 term.loadAddon(fit);
@@ -129,6 +152,17 @@ term.open($('#terminal'));
 
 let sessionId = '', currentPath = '.', editingIndex = -1;
 const sshSessions=new Map();
+const portPanel=initPortPanel({
+  getRefreshInterval:()=>preferences.portsInterval*1000,
+  getServerKey:()=>{const saved=sshSessions.get(sessionId)?.saved;return saved?JSON.stringify([saved.username,saved.host,saved.port||22]):''},
+  getSession:()=>sshSessions.get(sessionId)?.connected?sessionId:'',
+  getName:()=>{const saved=sshSessions.get(sessionId)?.saved;return saved?`${saved.name} - ${saved.username}@${saved.host}`:''}
+});
+const projectPanel=initProjectPanel({
+  getSession:()=>sshSessions.get(sessionId)?.connected?sessionId:'',
+  getName:()=>{const saved=sshSessions.get(sessionId)?.saved;return saved?`${saved.name} - ${saved.username}@${saved.host}`:''},
+  onCreated:path=>loadFiles(path)
+});
 let hosts = JSON.parse(localStorage.getItem('nekssh.desktop.hosts') || '[]');
 let directoryBookmarks=JSON.parse(localStorage.getItem('nekssh.desktop.directoryBookmarks')||'[]');
 let terminalMatchIndex=-1;
@@ -183,6 +217,12 @@ function saveHosts(){
 
 function renderHosts(){
   $('#hosts').innerHTML='';
+  const recent=$('#welcomeRecent');
+  recent.innerHTML=hosts.length?`<div class="recent-heading">已保存的连接<span>${hosts.length} 个工作环境</span></div><div class="recent-grid">${hosts.slice(0,3).map((host,index)=>`<button class="recent-host" data-recent-host="${index}">${icon('servers')}<span><b>${escapeHtml(host.name)}</b><small>${escapeHtml(host.username)}@${escapeHtml(host.host)}</small></span>${icon('arrow')}</button>`).join('')}</div>`:'';
+  recent.querySelectorAll('[data-recent-host]').forEach(button=>button.onclick=()=>{
+    const host=hosts[Number(button.dataset.recentHost)];
+    if(host.passwordSecret||host.privateKeySecret) connectSavedHost(host);else openDialog(host,Number(button.dataset.recentHost));
+  });
   if(!hosts.length){
     $('#hosts').innerHTML='<div class="host-empty">暂无已保存的连接</div>';
     return;
@@ -246,10 +286,18 @@ term.onData(data=>{
   trackTerminalInput(sessionId,data);
   Input(sessionId,data);
 });
-let suppressTerminalResize=false;
 let ignoreTerminalFit=false;
-term.onResize(({cols,rows})=>{if(!suppressTerminalResize&&sessionId)Resize(sessionId,cols,rows)});
-new ResizeObserver(()=>{if(!ignoreTerminalFit) fit.fit()}).observe($('#terminal'));
+let terminalFitFrame=0;
+term.onResize(({cols,rows})=>{if(sessionId)Resize(sessionId,cols,rows)});
+new ResizeObserver(()=>{if(!ignoreTerminalFit) scheduleTerminalFit()}).observe($('#terminal'));
+
+function scheduleTerminalFit(){
+  cancelAnimationFrame(terminalFitFrame);
+  terminalFitFrame=requestAnimationFrame(()=>{
+    terminalFitFrame=0;
+    if(!ignoreTerminalFit) refitTerminal();
+  });
+}
 
 function setTerminalCopyMode(enabled){
   terminalCopyMode=enabled;
@@ -262,7 +310,8 @@ $('#terminal').addEventListener('contextmenu',event=>{
   event.preventDefault();
   event.stopPropagation();
   const menu=$('#terminalContextMenu');
-  menu.innerHTML=`<button data-terminal-action="copy" ${term.hasSelection()?'':'disabled'}>复制选中内容</button><button data-terminal-action="copyMode">${terminalCopyMode?'退出复制模式':'进入复制模式'}</button><button data-terminal-action="paste">粘贴</button><div class="context-separator"></div><button data-terminal-action="services">systemd 服务管理</button><button data-terminal-action="selectAll">全选终端内容</button><button data-terminal-action="clear">清空终端</button>`;
+  const targetSession=sessionId,connected=sshSessions.get(targetSession)?.connected;
+  menu.innerHTML=`<button data-terminal-action="copy" ${term.hasSelection()?'':'disabled'}>复制选中内容</button><button data-terminal-action="copyMode">${terminalCopyMode?'退出复制模式':'进入复制模式'}</button><button data-terminal-action="paste">粘贴</button><button data-terminal-action="prompt" ${connected?'':'disabled'}>提示输入</button><div class="context-separator"></div><button data-terminal-action="services">systemd 服务管理</button><button data-terminal-action="selectAll">全选终端内容</button><button data-terminal-action="clear">清空终端</button>`;
   menu.hidden=false;
   const width=menu.offsetWidth,height=menu.offsetHeight;
   menu.style.left=`${Math.max(8,Math.min(event.clientX,window.innerWidth-width-8))}px`;
@@ -277,16 +326,82 @@ $('#terminal').addEventListener('contextmenu',event=>{
       const text=await ClipboardGetText();
       if(text&&targetSession&&targetSession===sessionId){trackTerminalInput(targetSession,text);await Input(targetSession,text)}
     }
+    if(action==='prompt'&&targetSession===sessionId) openTerminalPrompt();
     if(action==='selectAll') term.selectAll();
     if(action==='clear'){term.clear();const state=sshSessions.get(sessionId);if(state){state.outputChunks=[];state.outputBytes=0}}
     if(action==='services') openServiceManager();
-    if(!terminalCopyMode) term.focus();
+    if(!terminalCopyMode&&!$('#terminalPromptDialog').open) term.focus();
   });
 });
+let terminalPromptSession='',terminalPromptSkill='';
+function openTerminalPrompt(){
+  if(!sshSessions.get(sessionId)?.connected) return;
+  terminalPromptSession=sessionId;terminalPromptSkill='';
+  const input=$('#terminalPromptInput');
+  input.value=term.hasSelection()?term.getSelection():'';
+  $('#terminalPromptTarget').textContent=sshSessions.get(sessionId)?.saved?.name||'当前 SSH 会话';
+  $('#terminalPromptEnter').checked=false;
+  $('#terminalPromptPreview').open=false;
+  updateTerminalPrompt();
+  $('#terminalPromptDialog').showModal();
+  setTimeout(()=>input.focus(),30);
+}
+function updateTerminalPrompt(){
+  const skill=terminalSkills.find(item=>item.id===terminalPromptSkill),input=$('#terminalPromptInput');
+  document.querySelectorAll('[data-prompt-skill]').forEach(button=>{
+    const active=button.dataset.promptSkill===terminalPromptSkill;
+    button.classList.toggle('active',active);button.setAttribute('aria-pressed',String(active));
+  });
+  $('#terminalPromptBadge').textContent=skill?.label||'自定义输入';
+  $('#terminalSkillDescription').textContent=skill?.description||'不附加技能说明，只发送你输入的内容。';
+  input.placeholder=({'client-browser':'例如：用客户机 Chrome 打开 localhost:8888，检查页面是否显示正常。','client-run':'例如：把当前项目放到客户机运行，并把服务端口反射回来。','control-guide':'例如：检查为什么服务器上的 AI 无法访问客户机控制口。'})[terminalPromptSkill]||'输入你的任务或提示词…';
+  $('#terminalPromptCount').textContent=`${Array.from(input.value).length} 字`;
+  $('#terminalPromptSubmit').disabled=!input.value.trim();
+  $('#terminalPromptPreviewText').textContent=skillDraft(terminalPromptSkill,input.value);
+}
+document.querySelectorAll('[data-prompt-skill]').forEach(button=>button.onclick=()=>{
+  terminalPromptSkill=button.dataset.promptSkill;updateTerminalPrompt();$('#terminalPromptInput').focus();
+});
+$('#terminalPromptInput').addEventListener('input',updateTerminalPrompt);
+
+$('#terminalPromptForm').onsubmit=async event=>{
+  event.preventDefault();
+  const targetSession=terminalPromptSession;
+  const task=$('#terminalPromptInput').value;
+  if(!task.trim()) return;
+  let text=skillDraft(terminalPromptSkill,task);
+  if(terminalPromptSkill) text=skillInput({prompt:text});
+  if($('#terminalPromptEnter').checked) text+='\r';
+  $('#terminalPromptDialog').close();
+  if(!text||!targetSession||targetSession!==sessionId||!sshSessions.get(targetSession)?.connected){
+    setStatus('未填入：目标 SSH 会话已切换或断开','#e0af68');return;
+  }
+  try{
+    trackTerminalInput(targetSession,text);
+    await Input(targetSession,text);
+  }catch(error){alert(String(error))}
+  term.focus();
+};
+$('#terminalPromptCancel').onclick=()=>$('#terminalPromptDialog').close();
+$('#terminalPromptClose').onclick=()=>{$('#terminalPromptDialog').close();term.focus()};
+
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#terminalContextMenu'))$('#terminalContextMenu').hidden=true});
 document.addEventListener('keydown',event=>{if(event.key==='Escape')$('#terminalContextMenu').hidden=true});
 window.addEventListener('blur',()=>{$('#terminalContextMenu').hidden=true});
 $('#newConnection').onclick=()=>{$('#hostMenu').hidden=true;openDialog()};
+$('#welcomeConnect').onclick=()=>$('#newConnection').click();
+$('#welcomeHosts').onclick=()=>$('#hostMenuButton').click();
+$('#promptButton').onclick=openTerminalPrompt;
+function updateSidebar(collapsed){
+  document.body.classList.toggle('sidebar-collapsed',collapsed);
+  const button=$('#sidebarToggle'),label=collapsed?'展开资源侧栏':'收起资源侧栏';
+  button.setAttribute('aria-expanded',String(!collapsed));button.setAttribute('aria-label',label);button.title=label;
+  scheduleTerminalFit();
+}
+$('#sidebarToggle').onclick=()=>{
+  const collapsed=!document.body.classList.contains('sidebar-collapsed');
+  try{preferences=settingsStore.save({...preferences,showSidebar:!collapsed});updateSidebar(collapsed)}catch(error){alert(String(error))}
+};
 $('#hostMenuButton').onclick=event=>{
   event.stopPropagation();
   const menu=$('#hostMenu');
@@ -395,11 +510,11 @@ async function connectToHost(saved,password,privateKey,proxyPassword,closeDialog
 async function activateSession(id){
   const state=sshSessions.get(id);
   if(!state) return;
+  portPanel.close();
   sessionId=id;
   currentPath=state.path||'.';
   $('#welcome').hidden=true;
   $('#workspace').hidden=false;
-  $('#sessionTitle').textContent=`${state.saved.name} - ${state.saved.username}@${state.saved.host}`;
   setStatus(state.connected?'已连接':'已断开',state.connected?'#73daca':'#8996aa');
   term.reset();
   resetTerminalWrite();
@@ -419,12 +534,14 @@ async function activateSession(id){
 }
 
 function renderSessionTabs(){
+  $('#portsButton').disabled=!sshSessions.get(sessionId)?.connected;
+  $('#promptButton').disabled=!sshSessions.get(sessionId)?.connected;
   const container=$('#sessionTabs');
   if(!sshSessions.size){
     container.innerHTML='<div class="tabs-empty">暂无连接</div>';
     return;
   }
-  container.innerHTML=[...sshSessions.entries()].map(([id,state])=>`<button class="session-tab ${id===sessionId?'active':''}" data-session="${id}" title="${escapeHtml(state.saved.username)}@${escapeHtml(state.saved.host)}"><i class="${state.connected?'online':'offline'}"></i><span>${escapeHtml(state.saved.name)}</span><b data-close-session="${id}" title="关闭连接">×</b></button>`).join('');
+  container.innerHTML=[...sshSessions.entries()].map(([id,state])=>`<button class="session-tab ${id===sessionId?'active':''}" data-session="${id}" title="${escapeHtml(state.saved.name)} - ${escapeHtml(state.saved.username)}@${escapeHtml(state.saved.host)}"><i class="${state.connected?'online':'offline'}"></i><span>${escapeHtml(state.saved.name)}</span><b data-close-session="${id}" title="关闭连接">×</b></button>`).join('');
   container.querySelectorAll('[data-session]').forEach(tab=>{
     tab.onclick=()=>activateSession(tab.dataset.session);
     tab.oncontextmenu=event=>openTabContextMenu(event,tab.dataset.session);
@@ -467,13 +584,13 @@ function closeSessionTabs(ids){
 }
 
 function showNoSession(){
+  portPanel.close();
   sessionId='';
   stopStatsRefresh();
   resetStatsPanel();
   term.reset();
   $('#workspace').hidden=true;
   $('#welcome').hidden=false;
-  $('#sessionTitle').textContent='未连接';
   setStatus('就绪','#8996aa');
 }
 
@@ -648,8 +765,8 @@ function showReflect(address,error){
   const info=$('#reflectInfo');
   if(address){
     info.hidden=false;
-    info.textContent=`反射 http://${address} · 控制服务器 http://127.0.0.1:18766`;
-    info.title='服务器看 http://127.0.0.1:18765/docs 。客户机看 http://127.0.0.1:18766/docs';
+    info.textContent='双向控制已就绪';
+    info.title=`服务器看 http://${address}/docs 。客户机看 http://127.0.0.1:18766/docs`;
     return;
   }
   if(error){
@@ -675,7 +792,7 @@ EventsOn('ssh:closed',id=>{
   const state=sshSessions.get(id);
   if(state) state.connected=false;
   renderSessionTabs();
-  if(id===sessionId){setStatus('已断开','#8996aa');stopStatsRefresh();resetStatsPanel()}
+  if(id===sessionId){portPanel.close();setStatus('已断开','#8996aa');stopStatsRefresh();resetStatsPanel()}
 });
 EventsOn('transfer:progress',progress=>{
   transfers.set(progress.ID,{...progress});
@@ -1339,6 +1456,10 @@ $('#mkdir').onclick=async()=>{
   if(!name) return;
   try{await MakeDirectory(sessionId,currentPath,name);await loadFiles(currentPath)}catch(error){alert(String(error))}
 };
+$('#projectNew').onclick=()=>{
+  const selected=$('#fileList .file.selected')?._file;
+  projectPanel.create(selected?.Directory&&!selected.Parent?selected.Path:currentPath);
+};
 
 async function fileMenu(event,file){
   event.preventDefault();
@@ -1346,10 +1467,11 @@ async function fileMenu(event,file){
   $('#fileList').querySelectorAll('.file.selected').forEach(item=>item.classList.remove('selected'));
   event.currentTarget.classList.add('selected');
   const menu=$('#fileContextMenu');
+  const fileTargetSession=sessionId;
   let elf=false;
   if(!file.Directory){try{elf=await IsELF(sessionId,file.Path)}catch(error){console.warn(error)}}
   const primary=file.Directory
-    ?'<button data-action="open"><i>↳</i><span>打开目录</span></button>'
+    ?'<button data-action="open"><i>↳</i><span>打开目录</span></button><button data-action="newProject"><i>＋</i><span>在此目录中新建项目</span></button>'
     :isImageFile(file.Name)?'<button data-action="preview"><i>▣</i><span>查看图片</span></button>'
     :isMarkdownFile(file.Name)?'<button data-action="markdown"><i>M</i><span>Markdown 预览</span></button><button data-action="edit"><i>&lt;/&gt;</i><span>代码编辑</span></button>'
     :isPdfFile(file.Name)?'<button data-action="pdf"><i>P</i><span>查看 PDF</span></button>'
@@ -1362,6 +1484,7 @@ async function fileMenu(event,file){
   menu.querySelectorAll('[data-action]').forEach(button=>button.onclick=async()=>{
     menu.hidden=true;
     const action=button.dataset.action;
+    if(action==='newProject'){if(fileTargetSession===sessionId)projectPanel.create(file.Path);return}
     if(action==='open') return loadFiles(file.Path);
     if(action==='edit') return openCodeEditor(file);
     if(action==='preview') return openImageViewer(file);
@@ -1583,21 +1706,23 @@ function initFileResize(){
     document.body.classList.remove('resizing-files');
     localStorage.setItem('nekssh.desktop.files.height',String(Math.round(files.getBoundingClientRect().height)));
     ignoreTerminalFit=false;
-    suppressTerminalResize=false;
-    fit.fit();
+    scheduleTerminalFit();
+    term.focus();
   };
   handle.addEventListener('pointerdown',event=>{
     if(event.button!==0) return;
     event.preventDefault();
     dragging=true;
-    suppressTerminalResize=true;
     ignoreTerminalFit=true;
+    cancelAnimationFrame(terminalFitFrame);
+    handle.setPointerCapture(event.pointerId);
     document.body.classList.add('resizing-files');
   });
   window.addEventListener('pointermove',move);
   window.addEventListener('pointerup',end);
   window.addEventListener('pointercancel',end);
   window.addEventListener('blur',end);
+  handle.addEventListener('lostpointercapture',end);
 }
 
 function setFilePanelHeight(height,refit=true){
@@ -1608,7 +1733,19 @@ function setFilePanelHeight(height,refit=true){
   const maxFiles=Math.max(minFiles,total-handleHeight-minTerminal);
   const filesHeight=Math.min(Math.max(height,minFiles),maxFiles);
   workspace.style.gridTemplateRows=`minmax(${minTerminal}px, 1fr) ${handleHeight}px ${filesHeight}px`;
-  if(refit) fit.fit();
+  if(refit) scheduleTerminalFit();
+}
+
+function refitTerminal(){
+  if(!$('#terminal').getBoundingClientRect().height) return;
+  const buffer=term.buffer.active;
+  const viewportY=buffer.viewportY;
+  const followingOutput=viewportY===buffer.baseY;
+  fit.fit();
+  // Resize once at the final layout size; never send a fake row change to the TUI.
+  if(followingOutput) term.scrollToBottom();
+  else term.scrollToLine(Math.min(viewportY,term.buffer.active.baseY));
+  term.refresh(0,term.rows-1);
 }
 
 function initSearchBox(){
@@ -1798,9 +1935,12 @@ function countVisibleFileRows(){
 
 function startStatsRefresh(displayName){
   stopStatsRefresh();
+  resetStatsPanel();
   $('.server-name').textContent=displayName||'当前服务器';
-  statsDelay=window.setTimeout(loadServerStats,4000);
-  statsTimer=window.setInterval(loadServerStats,15000);
+  $('#processList').innerHTML='<div class="panel-empty">正在读取进程…</div>';
+  $('#partitionList').innerHTML='<div class="panel-empty">正在读取分区…</div>';
+  loadServerStats();
+  statsTimer=window.setInterval(loadServerStats,preferences.statsInterval*1000);
 }
 
 function stopStatsRefresh(){
@@ -1808,42 +1948,33 @@ function stopStatsRefresh(){
     clearInterval(statsTimer);
     statsTimer=0;
   }
-  if(statsDelay){
-    clearTimeout(statsDelay);
-    statsDelay=0;
-  }
-  statsFlight=null;
+  serverPanelLoader.stop();
 }
 
-let statsDelay=0;
+const serverPanelLoader=createServerPanelLoader({
+  stats:ServerStats,
+  processes:ServerProcesses,
+  partitions:ServerPartitions
+});
 
-let statsFlight=null;
-
-async function loadServerStats(){
-  if(!sessionId||statsFlight===sessionId) return;
-  const requestedSession=sessionId;
-  statsFlight=requestedSession;
-  try{
-    const stats=await ServerStats(requestedSession);
-    if(requestedSession!==sessionId) return;
-    const processes=await ServerProcesses(requestedSession);
-    if(requestedSession!==sessionId) return;
-    const partitions=await ServerPartitions(requestedSession);
-    if(requestedSession!==sessionId) return;
+function loadServerStats(){
+  if(!sessionId) return;
+  return serverPanelLoader.load(sessionId,{
+    stats:stats=>{
     if(stats.Host) $('.server-name').textContent=stats.Host;
     updateResource('cpu',stats.CPUPercent,`${stats.CPUPercent.toFixed(1)}%`);
     updateResource('mem',percent(stats.MemoryUsed,stats.MemoryTotal),`${formatBytes(stats.MemoryUsed)} / ${formatBytes(stats.MemoryTotal)}`);
     updateResource('disk',percent(stats.DiskUsed,stats.DiskTotal),`${formatBytes(stats.DiskUsed)} / ${formatBytes(stats.DiskTotal)}`);
     updateResource('swap',percent(stats.SwapUsed,stats.SwapTotal),`${formatBytes(stats.SwapUsed)} / ${formatBytes(stats.SwapTotal)}`);
-    renderProcesses(processes);
-    renderPartitions(partitions);
-  }catch(error){
-    $('.server-name').textContent='资源信息不可用';
-    $('#processList').innerHTML='<div class="panel-empty">进程信息不可用</div>';
-    $('#partitionList').innerHTML='<div class="panel-empty">分区信息不可用</div>';
-  }finally{
-    if(statsFlight===requestedSession) statsFlight=null;
-  }
+    },
+    processes:renderProcesses,
+    partitions:renderPartitions,
+    error:panel=>{
+      if(panel==='stats') $('.server-name').textContent='资源信息不可用';
+      if(panel==='processes') $('#processList').innerHTML='<div class="panel-empty">进程信息不可用</div>';
+      if(panel==='partitions') $('#partitionList').innerHTML='<div class="panel-empty">分区信息不可用</div>';
+    }
+  });
 }
 
 function newTransferID(){
@@ -1926,6 +2057,7 @@ $('#processSearch').addEventListener('input',()=>renderProcesses());
 document.querySelectorAll('[data-process-sort]').forEach(button=>button.onclick=()=>{
   const field=button.dataset.processSort;
   processSort={field,direction:processSort.field===field?-processSort.direction:(field==='Command'?1:-1)};
+  $('#processSortLabel').textContent=`${{PID:'PID',CPU:'CPU',Memory:'内存',Command:'名称'}[field]} ${processSort.direction===1?'↑':'↓'}`;
   document.querySelectorAll('[data-process-sort]').forEach(item=>item.classList.toggle('active',item===button));
   renderProcesses();
 });
@@ -1979,7 +2111,7 @@ function formatBytes(value){
   return `${(value/1073741824).toFixed(1)} GB`;
 }
 
-function setStatus(text,color){$('#status').textContent='● '+text;$('#status').style.color=color}
+function setStatus(text,color){$('#status').textContent='● '+text;$('#status').style.color=color;$('#status').title=text}
 function formatSize(n){return n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':(n/1048576).toFixed(1)+' MB'}
 function escapeHtml(value){const div=document.createElement('div');div.textContent=value;return div.innerHTML}
 
@@ -1994,6 +2126,30 @@ async function applyDebug(enabled){
     if(enabled) setStatus(`调试日志：${logPath}`,'#e0af68');
   }catch(error){alert(String(error))}
 }
-$('#debugButton').onclick=()=>applyDebug(!$('#debugButton').classList.contains('active'));
-applyDebug(localStorage.getItem('nekssh.desktop.debug')==='1');
+async function applyWorkspaceSettings(value){
+  const previous=preferences;preferences=value;
+  document.body.dataset.accent=value.accent;document.body.dataset.density=value.density;
+  term.options.fontSize=value.fontSize;term.options.fontFamily=terminalFontStack(value.fontFamily);
+  term.options.lineHeight=value.lineHeight;term.options.cursorStyle=value.cursorStyle;
+  term.options.cursorBlink=value.cursorBlink;term.options.scrollback=value.scrollback;
+  updateSidebar(!value.showSidebar);
+  if(statsTimer&&previous.statsInterval!==value.statsInterval){clearInterval(statsTimer);statsTimer=window.setInterval(loadServerStats,value.statsInterval*1000)}
+  portPanel.reschedule();
+  if(!document.body.dataset.settingsReady||$('#debugButton').classList.contains('active')!==value.debug) await applyDebug(value.debug);
+  document.body.dataset.settingsReady='true';
+}
+const settingsPanel=initSettingsPanel({store:settingsStore,onApply:async value=>{await applyWorkspaceSettings(value);setStatus('设置已保存并应用','#79d7be')}});
+$('#settingsButton').onclick=()=>settingsPanel.open();
+$('#debugButton').onclick=async()=>{
+  try{preferences=settingsStore.save({...preferences,debug:!preferences.debug});await applyDebug(preferences.debug)}catch(error){alert(String(error))}
+};
+applyWorkspaceSettings(preferences).catch(error=>console.warn('应用设置失败',error));
 renderHosts();
+Version().then(version=>{
+  const label=String(version||'').trim();
+  if(!label) return;
+  $('#appVersion').textContent=label;
+  const title=`NekSSH ${label}`;
+  document.title=title;
+  WindowSetTitle(title);
+}).catch(error=>console.warn(error));

@@ -17,7 +17,7 @@ func main() {
 
 	// Create application with options
 	err := wails.Run(&options.App{
-		Title:     "NekSSH",
+		Title:     appTitle(),
 		Width:     1280,
 		Height:    820,
 		MinWidth:  900,

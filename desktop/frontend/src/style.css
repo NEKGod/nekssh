@@ -3,7 +3,8 @@
 body{margin:0;overflow:hidden}
 .shell{height:100vh;display:flex}
 aside{width:248px;padding:8px;background:#111722;border-right:1px solid #293141;overflow:hidden;display:flex;flex-direction:column;gap:8px}
-aside h1{margin:0 0 2px;color:#73daca;font-size:20px}
+aside h1{margin:0 0 2px;color:#73daca;font-size:20px;line-height:1.15}
+aside h1 small{display:block;margin-top:2px;color:#7d8b9e;font-size:11px;font-weight:500;letter-spacing:.01em}
 button{padding:8px 11px;border:1px solid #384253;border-radius:7px;background:#1b2330;color:#dfe6f3;cursor:pointer}
 .primary,#newConnection{background:#35b8a0;color:#07120f;border:0;font-weight:700}
 .muted{margin-top:15px;color:#657084;font-size:12px}
@@ -43,7 +44,7 @@ button{padding:8px 11px;border:1px solid #384253;border-radius:7px;background:#1
 #processContextMenu button:hover{background:#243140;color:#f0f4f8}
 #processContextMenu button.danger{color:#ee9ca7}
 #processContextMenu button.danger:hover{background:#3a232a;color:#ffc1c8}
-#terminalContextMenu{position:fixed;z-index:120;width:175px;padding:5px;border:1px solid #3a4658;border-radius:6px;background:#171f2b;box-shadow:0 14px 38px #000b}
+#terminalContextMenu{position:fixed;z-index:120;width:225px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow-y:auto;padding:5px;border:1px solid #3a4658;border-radius:6px;background:#171f2b;box-shadow:0 14px 38px #000b}
 #terminalContextMenu[hidden]{display:none}
 #terminalContextMenu button{width:100%;height:31px;padding:0 10px;border:0;border-radius:4px;background:transparent;color:#c4cedb;text-align:left;font-size:11px}
 #terminalContextMenu button:hover:not(:disabled){background:#243140;color:#f0f4f8}

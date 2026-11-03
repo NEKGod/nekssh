@@ -36,9 +36,9 @@ import (
 )
 
 type App struct {
-	ctx         context.Context
-	mu          sync.RWMutex
-	forwardMu   sync.Mutex
+	ctx              context.Context
+	mu               sync.RWMutex
+	forwardMu        sync.Mutex
 	sessions         map[string]*desktopSession
 	pendingKeys      map[string]ssh.PublicKey
 	forwards         map[string]*sharedForward
@@ -52,27 +52,28 @@ type App struct {
 }
 
 type desktopSession struct {
-	host        string
-	client      *ssh.Client
-	session     *ssh.Session
-	stdin       io.WriteCloser
-	sftp        *sftp.Client
-	sftpMu      sync.Mutex
-	sftpReady   bool
-	close       sync.Once
-	notify      sync.Once
-	done        chan struct{}
-	app         *App
-	forwardKeys      []string
-	shareKey         string
-	reflectMu        sync.Mutex
-	reflectListener  net.Listener
-	reflectMore      []net.Listener
-	localForwards    []net.Listener
+	trace           *sshConnectionTrace
+	host            string
+	client          *ssh.Client
+	session         *ssh.Session
+	stdin           io.WriteCloser
+	sftp            *sftp.Client
+	sftpMu          sync.Mutex
+	sftpReady       bool
+	close           sync.Once
+	notify          sync.Once
+	done            chan struct{}
+	app             *App
+	shareKey        string
+	reflectMu       sync.Mutex
+	reflectListener net.Listener
+	reflectMore     []net.Listener
+	localForwards   []net.Listener
 }
 
 type sharedForward struct {
 	listener net.Listener
+	tunnel   *portTunnel
 	target   string
 	sessions map[*desktopSession]bool
 }
@@ -244,7 +245,10 @@ func (a *App) shutdown(ctx context.Context) {
 	}
 }
 
-func (a *App) Connect(req ConnectionRequest) error {
+func (a *App) Connect(req ConnectionRequest) (connectErr error) {
+	trace := &sshConnectionTrace{started: time.Now()}
+	finishConnect := traceSSHStage(req.ID, "connect_total")
+	defer func() { finishConnect(connectErr) }()
 	if strings.TrimSpace(req.ID) == "" || strings.TrimSpace(req.Host) == "" || strings.TrimSpace(req.Username) == "" {
 		return errors.New("连接名称、主机和用户名不能为空")
 	}
@@ -272,20 +276,27 @@ func (a *App) Connect(req ConnectionRequest) error {
 	if err != nil {
 		return err
 	}
+	finishStage := traceSSHStage(req.ID, "ssh_handshake_and_auth")
 	client, err := openSSH(req, &ssh.ClientConfig{User: req.Username, Auth: auth, HostKeyCallback: callback, Timeout: 15 * time.Second})
+	finishStage(err)
 	if err != nil {
 		return friendlyDesktopError(err)
 	}
+	finishStage = traceSSHStage(req.ID, "new_session")
 	shell, err := client.NewSession()
+	finishStage(err)
 	if err != nil {
 		client.Close()
 		return err
 	}
-	if err = shell.RequestPty("xterm-256color", req.Rows, req.Cols, ssh.TerminalModes{
+	finishStage = traceSSHStage(req.ID, "request_pty")
+	err = shell.RequestPty("xterm-256color", req.Rows, req.Cols, ssh.TerminalModes{
 		ssh.ECHO:          1,
 		ssh.TTY_OP_ISPEED: 14400,
 		ssh.TTY_OP_OSPEED: 14400,
-	}); err != nil {
+	})
+	finishStage(err)
+	if err != nil {
 		shell.Close()
 		client.Close()
 		return err
@@ -293,12 +304,16 @@ func (a *App) Connect(req ConnectionRequest) error {
 	stdin, _ := shell.StdinPipe()
 	stdout, _ := shell.StdoutPipe()
 	stderr, _ := shell.StderrPipe()
-	if err = shell.Shell(); err != nil {
+	finishStage = traceSSHStage(req.ID, "shell_request")
+	err = shell.Shell()
+	finishStage(err)
+	if err != nil {
 		shell.Close()
 		client.Close()
 		return err
 	}
 	entry := &desktopSession{host: req.Host, client: client, session: shell, stdin: stdin, done: make(chan struct{}), app: a}
+	entry.trace = trace
 	a.mu.Lock()
 	if old := a.sessions[req.ID]; old != nil {
 		old.stop()
@@ -319,7 +334,9 @@ func (a *App) finishSessionSetup(req ConnectionRequest, entry *desktopSession) {
 		return
 	default:
 	}
+	finishStage := traceSSHStage(req.ID, "sftp_init")
 	sftpClient, err := sftp.NewClient(entry.client)
+	finishStage(err)
 	if err != nil || sftpClient == nil {
 		debugf("sftp: %v", err)
 		entry.markSFTPReady(nil)
@@ -343,7 +360,9 @@ func (a *App) finishSessionSetup(req ConnectionRequest, entry *desktopSession) {
 		if listenAddress == "" {
 			listenAddress = "127.0.0.1"
 		}
+		finishStage = traceSSHStage(req.ID, "local_listen_"+strconv.Itoa(forward.ListenPort))
 		note, registerErr := a.registerForward(entry, listenAddress, forward)
+		finishStage(registerErr)
 		if registerErr != nil {
 			notes = append(notes, fmt.Sprintf("转发规则 %q 未启动: %v", forward.Name, registerErr))
 			continue
@@ -355,6 +374,9 @@ func (a *App) finishSessionSetup(req ConnectionRequest, entry *desktopSession) {
 	if len(notes) > 0 && a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "forward:notice", req.ID, strings.Join(notes, "；"))
 	}
+	finishStage = traceSSHStage(req.ID, "agent_skill_setup")
+	a.installAgentSkill(entry)
+	finishStage(nil)
 	a.serveReflect(req.ID, entry)
 }
 
@@ -412,11 +434,22 @@ func dialSSH(req ConnectionRequest, config *ssh.ClientConfig) (*ssh.Client, erro
 
 func dialSSHOnce(req ConnectionRequest, config *ssh.ClientConfig) (*ssh.Client, error) {
 	target := net.JoinHostPort(req.Host, strconv.Itoa(req.Port))
+	finishDial := traceSSHStage(req.ID, "tcp_or_proxy_dial")
 	connection, err := dialConnection(req, target)
+	finishDial(err)
 	if err != nil {
 		return nil, err
 	}
 	prepared := *config
+	finishKeyExchange := traceSSHStage(req.ID, "key_exchange_to_hostkey")
+	hostKeyCallback := prepared.HostKeyCallback
+	if hostKeyCallback != nil {
+		prepared.HostKeyCallback = func(hostname string, remote net.Addr, key ssh.PublicKey) error {
+			err := hostKeyCallback(hostname, remote, key)
+			finishKeyExchange(err)
+			return err
+		}
+	}
 	if prepared.ClientVersion == "" {
 		prepared.ClientVersion = sshClientVersion
 	}
@@ -500,16 +533,23 @@ func (a *App) registerForward(session *desktopSession, listenAddress string, rul
 	if rule.ListenPort <= 0 || rule.ListenPort > 65535 {
 		return "", fmt.Errorf("监听端口无效")
 	}
+	if rule.TargetHost == "" || rule.TargetPort < 1 || rule.TargetPort > 65535 {
+		return "", fmt.Errorf("目标地址或端口无效")
+	}
 	key := net.JoinHostPort(listenAddress, strconv.Itoa(rule.ListenPort))
 	target := net.JoinHostPort(rule.TargetHost, strconv.Itoa(rule.TargetPort))
 	a.forwardMu.Lock()
 	defer a.forwardMu.Unlock()
+	select {
+	case <-session.done:
+		return "", fmt.Errorf("SSH 会话已断开")
+	default:
+	}
 	if existing := a.forwards[key]; existing != nil {
 		if existing.target != target {
 			return "", fmt.Errorf("%s 已转发到 %s", key, existing.target)
 		}
 		existing.sessions[session] = true
-		session.forwardKeys = append(session.forwardKeys, key)
 		return "", nil
 	}
 	listener, err := net.Listen("tcp", key)
@@ -519,23 +559,16 @@ func (a *App) registerForward(session *desktopSession, listenAddress string, rul
 		}
 		return "", err
 	}
-	forward := &sharedForward{listener: listener, target: target, sessions: map[*desktopSession]bool{session: true}}
-	a.forwards[key] = forward
-	session.forwardKeys = append(session.forwardKeys, key)
-	go a.forwardLocal(forward)
+	a.addForwardLocked(session, listener, target, rule.TargetPort)
 	return "", nil
 }
 
 func isAddrInUse(err error) bool {
-	return errors.Is(err, syscall.EADDRINUSE)
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, windows.WSAEADDRINUSE)
 }
 
 func (a *App) forwardLocal(forward *sharedForward) {
-	for {
-		local, err := forward.listener.Accept()
-		if err != nil {
-			return
-		}
+	forward.tunnel.serve(func(ctx context.Context) (net.Conn, error) {
 		a.forwardMu.Lock()
 		sessions := make([]*desktopSession, 0, len(forward.sessions))
 		for session := range forward.sessions {
@@ -543,35 +576,30 @@ func (a *App) forwardLocal(forward *sharedForward) {
 		}
 		a.forwardMu.Unlock()
 		var remote net.Conn
+		var err error
 		for _, session := range sessions {
-			remote, err = session.client.Dial("tcp", forward.target)
+			remote, err = session.client.DialContext(ctx, "tcp", forward.target)
 			if err == nil {
 				break
 			}
 		}
 		if remote == nil {
-			local.Close()
-			continue
+			return nil, fmt.Errorf("转发目标不可用: %v", err)
 		}
-		go bridgeConnections(local, remote)
-	}
+		return remote, nil
+	})
 }
 
 func (a *App) releaseForwards(session *desktopSession) {
 	a.forwardMu.Lock()
 	defer a.forwardMu.Unlock()
-	for _, key := range session.forwardKeys {
-		forward := a.forwards[key]
-		if forward == nil {
-			continue
-		}
+	for key, forward := range a.forwards {
 		delete(forward.sessions, session)
 		if len(forward.sessions) == 0 {
-			forward.listener.Close()
+			forward.tunnel.stop()
 			delete(a.forwards, key)
 		}
 	}
-	session.forwardKeys = nil
 }
 
 func encodeTerminalChunk(data []byte) string {
@@ -594,6 +622,7 @@ func (a *App) stream(id string, session *desktopSession, reader io.Reader, signa
 	for {
 		n, err := reader.Read(buffer)
 		if n > 0 {
+			session.trace.output(id, false)
 			copied := make([]byte, n)
 			copy(copied, buffer[:n])
 			chunks <- copied
@@ -615,6 +644,7 @@ func (a *App) writeTerminal(id string, session *desktopSession, chunks <-chan []
 			pending = pending[:0]
 			return
 		}
+		session.trace.output(id, true)
 		runtime.EventsEmit(a.ctx, "ssh:output", id, encodeTerminalChunk(pending))
 		pending = pending[:0]
 	}

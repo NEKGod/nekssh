@@ -20,6 +20,16 @@ Push-Location frontend
 npm install
 Pop-Location
 
+$versionFile = Join-Path $ProjectRoot "version.go"
+$versionText = Get-Content -Raw -Encoding UTF8 $versionFile
+if ($versionText -notmatch 'const productVersion = "(\d+)\.(\d+)\.(\d+)"') {
+    throw "version.go 里没有 productVersion"
+}
+$nextVersion = "{0}.{1}.{2}" -f $Matches[1], $Matches[2], ([int]$Matches[3] + 1)
+$versionText = $versionText -replace 'const productVersion = "\d+\.\d+\.\d+"', "const productVersion = `"$nextVersion`""
+[System.IO.File]::WriteAllText($versionFile, $versionText.TrimEnd() + "`n", (New-Object System.Text.UTF8Encoding $false))
+Write-Host "版本号：$nextVersion"
+
 Write-Host "正在运行 Go 测试..."
 go test ./...
 

@@ -1,0 +1,55 @@
+#terminalPromptDialog{width:min(900px,calc(100vw - 40px));max-width:none;max-height:calc(100dvh - 40px);padding:0;border:1px solid #344251;border-radius:14px;background:#111923;box-shadow:0 32px 100px #0009;overflow:hidden}
+#terminalPromptDialog::backdrop{background:#040810b3;backdrop-filter:blur(3px)}
+.terminal-prompt-window{display:flex;flex-direction:column;gap:0;padding:0;max-height:calc(100dvh - 42px)}
+.prompt-header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:22px 24px;border-bottom:1px solid #263342;flex-shrink:0}
+.prompt-heading{display:flex;align-items:center;gap:13px}
+.prompt-heading-icon{display:grid;place-items:center;width:42px;height:42px;border:1px solid #325c55;border-radius:12px;background:#1a3431;color:#80ddca;font-size:25px}
+.prompt-heading h2{margin:0;color:#e9f0f8;font-size:18px;font-weight:600;letter-spacing:.02em}
+.prompt-heading p{margin:5px 0 0;color:#8493a6;font-size:12px}
+#terminalPromptClose{width:30px;height:30px;padding:0;border:0;background:transparent;color:#8e9bad;font-size:23px}
+#terminalPromptClose:hover{background:#263342;color:#edf2fa}
+.prompt-layout{display:grid;grid-template-columns:235px minmax(0,1fr);min-height:0;overflow:auto}
+.prompt-library{padding:23px 14px;background:#0e151e;border-right:1px solid #263342}
+.prompt-section-label{display:flex;justify-content:space-between;align-items:center;padding:0 10px 14px;color:#a5b3c5;font-size:11px}
+.prompt-section-label span{color:#53657a;font-size:9px;letter-spacing:.1em}
+.prompt-skill-list{display:flex;flex-direction:column;gap:7px}
+.prompt-skill{display:flex;align-items:center;gap:10px;width:100%;padding:13px 10px;border:1px solid transparent;border-radius:8px;background:transparent;text-align:left;transition:background .15s,border-color .15s}
+.prompt-skill:hover{background:#18232f}
+.prompt-skill.active{border-color:#38685e;background:#18332e}
+.prompt-skill-icon{display:grid;place-items:center;flex:0 0 27px;height:30px;color:#8c9db2;font-size:23px}
+.prompt-skill.active .prompt-skill-icon{color:#7adbc3}
+.prompt-skill>span:nth-child(2){flex:1;min-width:0}
+.prompt-skill b{display:block;color:#d0dae8;font-size:12px;font-weight:500;line-height:1.5}
+.prompt-skill small{display:block;margin-top:4px;color:#718399;font-size:10px;line-height:1.5}
+.prompt-skill.active b{color:#9ce3d3}
+.prompt-skill i{visibility:hidden;color:#7adbc3;font-size:12px;font-style:normal}
+.prompt-skill.active i{visibility:visible}
+.prompt-library-note{margin:24px 10px 0;color:#5f7187;font-size:10px;line-height:1.9}
+.prompt-editor{min-width:0;padding:24px}
+.prompt-context{display:flex;align-items:center;justify-content:space-between;gap:10px}
+#terminalPromptBadge{padding:4px 8px;border:1px solid #31534c;border-radius:5px;background:#19302c;color:#8adac7;font-size:10px;white-space:nowrap}
+#terminalPromptTarget{max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#708398;font-size:11px}
+#terminalSkillDescription{min-height:18px;margin:11px 0 24px;color:#8fa0b5;font-size:12px;line-height:1.7}
+.prompt-task-label{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:10px}
+.prompt-task-label label{color:#dce5f2;font-size:13px;font-weight:500}
+#terminalPromptCount{color:#617389;font-size:10px}
+#terminalPromptInput{display:block;width:100%;height:180px;min-height:110px;max-height:35vh;resize:vertical;margin:0;padding:14px;border:1px solid #344558;border-radius:9px;background:#0c131c;color:#e0e8f4;font:13px/1.85 Inter,system-ui,sans-serif;outline:none;transition:border-color .15s,box-shadow .15s}
+#terminalPromptInput:focus{border-color:#54b8a1;box-shadow:0 0 0 3px #35b8a012}
+#terminalPromptInput::placeholder{color:#4f637b}
+.prompt-editor-hint{margin:9px 0 19px;color:#647991;font-size:10px;line-height:1.7}
+#terminalPromptPreview{border-top:1px solid #263342;padding-top:13px}
+#terminalPromptPreview summary{display:flex;justify-content:space-between;align-items:center;color:#94a7bd;font-size:11px;cursor:pointer;list-style:none}
+#terminalPromptPreview summary::before{content:'›';margin-right:7px;color:#6e849c;font-size:16px}
+#terminalPromptPreview[open] summary::before{transform:rotate(90deg)}
+#terminalPromptPreview summary span{margin-left:auto;color:#536a81;font-size:10px}
+#terminalPromptPreviewText{max-height:190px;overflow:auto;margin:12px 0 0;padding:12px;border:1px solid #263342;border-radius:6px;background:#0b121a;color:#8fa4bc;white-space:pre-wrap;overflow-wrap:anywhere;font:11px/1.8 Inter,system-ui,sans-serif;user-select:text}
+.prompt-footer{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 24px;border-top:1px solid #263342;background:#101720;flex-shrink:0}
+.prompt-enter{display:inline-flex;flex-direction:row;align-items:center;gap:7px;margin:0;color:#8b9bb0;font-size:11px;cursor:pointer}
+.prompt-enter input{width:14px;height:14px;margin:0;accent-color:#55c9af}
+.prompt-footer-actions{display:flex;align-items:center;gap:9px}
+.prompt-footer-actions button{height:35px;padding:0 16px;font-size:12px}
+#terminalPromptCancel{border-color:#303e4e;background:transparent;color:#98a9bd}
+#terminalPromptSubmit{display:flex;align-items:center;gap:16px;background:#69d5ba;color:#10251e}
+#terminalPromptSubmit:disabled{background:#26453e;color:#658b7f;cursor:default}
+#terminalPromptDialog button:focus-visible,#terminalPromptPreview summary:focus-visible{outline:2px solid #69d5ba;outline-offset:3px}
+@media(max-width:680px){#terminalPromptDialog{width:calc(100vw - 24px);max-height:calc(100dvh - 24px)}.terminal-prompt-window{max-height:calc(100dvh - 26px)}.prompt-header{padding:16px}.prompt-heading p{font-size:10px}.prompt-layout{grid-template-columns:1fr}.prompt-library{padding:14px;border-right:0;border-bottom:1px solid #263342}.prompt-section-label{padding:0 2px 10px}.prompt-skill-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}.prompt-skill{padding:9px 6px;gap:5px}.prompt-skill-icon{flex-basis:21px;font-size:19px}.prompt-skill small{display:none}.prompt-skill b{font-size:11px}.prompt-library-note{display:none}.prompt-editor{padding:18px 16px}#terminalSkillDescription{margin-bottom:16px}.prompt-footer{padding:14px 16px;gap:8px}.prompt-footer-actions button{padding:0 12px}}

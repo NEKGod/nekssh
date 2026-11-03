@@ -1,0 +1,56 @@
+#portsDialog{width:min(980px,calc(100vw - 32px));max-height:calc(100vh - 40px)}
+.ports-window{display:flex;flex-direction:column;max-height:calc(100vh - 44px)}
+.ports-window>.permission-head{flex-shrink:0}
+.ports-toolbar{display:flex;align-items:center;gap:10px;padding:12px 16px 4px}
+.ports-toolbar input{flex:1;min-width:0;height:34px;padding:0 10px}
+.ports-toolbar button,.ports-table button,.port-tunnel-actions button{height:30px;padding:0 10px;font-size:12px;white-space:nowrap}
+.ports-toolbar span{color:#8996aa;font-size:11px;white-space:nowrap}
+.ports-help{margin:8px 16px;color:#8996aa;font-size:12px;line-height:1.6}
+#portsMessage{min-height:18px;margin:0 16px 8px;color:#73daca;font-size:12px;overflow-wrap:anywhere}
+#portsMessage.error{color:#f7768e}
+.ports-tunnels{padding:0 16px 12px;border-bottom:1px solid #293445;max-height:280px;overflow:auto;flex-shrink:0}
+.ports-tunnels h3{margin:0 0 8px;font-size:12px;color:#b9c6d7}
+.ports-tunnels-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.ports-tunnels-head h3{margin:0}
+.ports-tunnels-head label{display:flex;align-items:center;gap:6px;color:#8996aa;font-size:11px}
+.ports-tunnels-head select{height:28px;padding:0 6px;border:1px solid #384253;border-radius:5px;background:#111722;color:#b9c6d7;font-size:12px}
+#portTunnelList{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,270px),1fr));gap:10px}
+.ports-empty-tunnels{grid-column:1/-1;padding:16px;border:1px dashed #303d4e;border-radius:8px;color:#8996aa;font-size:12px;text-align:center}
+.port-tunnel{display:flex;flex-direction:column;min-width:0;padding:12px;background:linear-gradient(135deg,#182b2b,#18212d);border:1px solid #31514d;border-radius:9px;transition:border-color .15s}
+.port-tunnel:hover{border-color:#4c887a}
+.port-tunnel-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.port-tunnel-status{display:inline-flex;align-items:center;gap:5px;color:#73daca;font-size:11px}
+.port-tunnel-status i{width:6px;height:6px;border-radius:50%;background:#73daca}
+.port-tunnel-route{flex:1;min-width:0}
+.port-tunnel-route b,.port-tunnel-route small{display:block;overflow-wrap:anywhere}
+.port-tunnel-route b{margin-top:4px;color:#73daca;font:14px Consolas,monospace;line-height:1.4;user-select:text}
+.port-tunnel-route small{color:#8996aa;font-size:11px}
+.port-tunnel-route>div:last-child b{color:#c0cee0;font-size:13px}
+.port-tunnel-arrow{display:block;margin:4px 0;color:#637d85;font-size:14px}
+.port-tunnel-actions{display:flex;gap:6px;flex-wrap:wrap;margin-top:12px;padding-top:10px;border-top:1px solid #2d4149}
+.port-tunnel-actions button[data-stop]{margin-left:auto;color:#f7768e;border-color:#613846}
+.ports-table-wrap{overflow:auto;min-height:160px}
+.ports-table{width:100%;border-collapse:collapse;text-align:left;font-size:12px}
+.ports-table th{position:sticky;top:0;background:#18212d;color:#8996aa;font-weight:500;padding:10px 12px;white-space:nowrap;z-index:1}
+.ports-table td{padding:9px 12px;border-top:1px solid #263040}
+.ports-table tr:hover td{background:#1b2633}
+.ports-table button{border-color:#2e675a;color:#73daca;background:#122c25}
+.ports-table button:disabled{color:#748196;border-color:#303a49;background:#1b2330;cursor:default}
+.port-protocol{font:11px Consolas,monospace;color:#a4bcdd}
+.port-address,.port-number{font-family:Consolas,monospace;overflow-wrap:anywhere}
+.port-number{color:#73daca;font-weight:600}
+.port-process{max-width:310px}
+.port-process b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500}
+.port-process small{display:block;color:#748196;margin-top:3px}
+.port-address>span,.port-pids>span{display:block;max-width:145px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.port-pids>span{max-width:90px}
+.port-details summary{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;color:#dfe6f3}
+.port-details summary small{display:inline;color:#748196;margin-left:4px}
+.port-details>div{max-width:310px;max-height:200px;overflow:auto;margin-top:7px}
+.port-details p{margin:0;padding:6px 0;border-top:1px solid #303a49;font-size:11px}
+.port-details p span{display:block;margin-top:3px;color:#8996aa;overflow-wrap:anywhere}
+.port-group-actions{display:flex;align-items:center;gap:5px}
+.port-group-actions select{max-width:110px;height:30px;padding:0 5px;border:1px solid #384253;border-radius:5px;background:#111722;color:#b9c6d7;font-size:11px}
+#portsButton{height:32px;padding:0 10px}
+#portsButton:disabled{opacity:.45;cursor:default}
+@media(max-width:720px){.ports-table td,.ports-table th{padding:8px 6px}.ports-toolbar{gap:5px}}

@@ -67,7 +67,9 @@ func (a *App) startReflectServer() {
 }
 
 func (a *App) serveReflect(id string, session *desktopSession) {
+	finishListen := traceSSHStage(id, "remote_listen_18765")
 	listener, err := session.client.Listen("tcp", "127.0.0.1:"+strconv.Itoa(neksshReflectPort))
+	finishListen(err)
 	if err != nil {
 		debugf("反射到服务器失败: %v", err)
 		a.emitReflect("reflect:notice", id, "本机端口未能反射到服务器："+err.Error())
