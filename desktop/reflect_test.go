@@ -26,6 +26,9 @@ func TestReflectAgentWritesFileAndRunsCommand(t *testing.T) {
 	if index.StatusCode != http.StatusOK || !strings.Contains(string(indexBody), "/v1/run") || !strings.Contains(string(indexBody), "/docs") {
 		t.Fatalf("index %d %s", index.StatusCode, indexBody)
 	}
+	if !strings.Contains(string(indexBody), `"control":"`+server.URL+`"`) {
+		t.Fatalf("index does not advertise actual control URL: %s", indexBody)
+	}
 	docs, err := http.Get(server.URL + "/docs")
 	if err != nil {
 		t.Fatal(err)

@@ -1,4 +1,4 @@
-const clientBridge=`你现在位于 NekSSH 连接的 SSH 服务器上，客户机是运行 NekSSH 的 Windows 电脑，不是当前服务器。服务器上的 http://127.0.0.1:18765 通过 SSH 反向通道连接客户机。先用带连接和总时限的 HTTP 请求读取该地址的 / 和 /docs；只有 / 返回 service=nekssh 且 ok=true 才继续，实际接口以 /docs 为准。连接失败或身份不符就报告具体错误，让用户检查 NekSSH 的 SSH 连接和反射状态，不要扫描其他端口，也不要改在服务器上运行来冒充客户机。`;
+const clientBridge=`你现在位于 NekSSH 连接的 SSH 服务器上，客户机是运行 NekSSH 的 Windows 电脑，不是当前服务器。先读取当前 SSH 用户 HOME 下 ~/.nekssh/clients/*.json；每个文件是一台已注册客户机，control 是该客户机动态分配的服务器本地控制地址，docs 是接口说明。存在多份记录时按 connectedAt 从新到旧逐一用有界 HTTP 请求验证 control/；只有返回 service=nekssh、ok=true 且 control 与记录一致才使用，然后读取 docs。不要猜固定端口或扫描端口。记录不存在或全部失效就报告具体错误，让用户检查 NekSSH 的 SSH 连接，不要改在服务器上运行来冒充客户机。`;
 const boundaries=`以下是能力说明，不是对客户机任意操作的授权。只执行用户在“我的任务”中指定的事情；任务未填写则等待用户补充。不要安装依赖、修改安全配置或操作无关文件来强行完成；缺少必要条件时先说明。不要把本机地址描述成公网地址。`;
 
 export const terminalSkills=Object.freeze([
@@ -20,8 +20,8 @@ ${boundaries}
 我的任务：`},
   {id:'control-guide',label:'双向控制与通道排查',description:'解释控制方向并检查服务器到客户机的可用通道',prompt:`【NekSSH 技能：双向控制与通道排查】
 ${clientBridge}
-区分两个方向：① 当前 SSH 服务器访问 127.0.0.1:18765，是控制 Windows 客户机，可写 workspace 文件、运行任务，并把客户机服务反射回服务器；② Windows 客户机访问 127.0.0.1:18766，是通过 NekSSH 控制 SSH 服务器，其 /docs 描述 /v1/run、/v1/files 和 /v1/forward。18766 位于客户机，不要从当前服务器访问同名 localhost 地址来判断客户机控制端是否在线。
-先根据用户任务确定方向。服务器控制客户机时实际检测 18765 的身份、/docs 和 /v1/jobs，报告哪一步失败；客户机控制服务器时说明需要在客户机执行的检测，不要伪造在客户机执行过的结果。有多个 SSH 会话时，客户机 18766 调用必须使用实际会话 ID 的 ?session= 参数，不要猜 ID 或随便选择目标服务器。服务端口的 local/remote 必须标明分别位于哪一侧；保持端口只绑定回环地址。
+区分两个方向：① 当前 SSH 服务器读取 ~/.nekssh/clients/*.json 后访问其中的 control，是控制 Windows 客户机，可写 workspace 文件、运行任务，并把客户机服务反射回服务器；② Windows 客户机访问 127.0.0.1:18766，是通过 NekSSH 控制 SSH 服务器，其 /docs 描述 /v1/run、/v1/files 和 /v1/forward。18766 位于客户机，不要从当前服务器访问同名 localhost 地址来判断客户机控制端是否在线。
+先根据用户任务确定方向。服务器控制客户机时实际读取注册信息并检测 control 的身份、docs 和 /v1/jobs，报告哪一步失败；客户机控制服务器时说明需要在客户机执行的检测，不要伪造在客户机执行过的结果。有多个 SSH 会话时，客户机 18766 调用必须使用实际会话 ID 的 ?session= 参数，不要猜 ID 或随便选择目标服务器。服务端口的 local/remote 必须标明分别位于哪一侧；保持端口只绑定回环地址。
 ${boundaries}
 我的任务：`}
 ]);

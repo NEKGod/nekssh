@@ -192,7 +192,7 @@ func (a *App) controlSession(r *http.Request) (*desktopSession, error) {
 }
 
 var (
-	errNoControlSession   = errString("没有已连接的 SSH 会话")
+	errNoControlSession    = errString("没有已连接的 SSH 会话")
 	errManyControlSessions = errString("有多个会话，请加 ?session=会话ID")
 )
 
@@ -214,7 +214,7 @@ func runOnServer(session *desktopSession, command string) (string, error) {
 }
 
 func forwardServerPort(session *desktopSession, port int) (string, error) {
-	listener, err := net.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", err
 	}
@@ -295,18 +295,18 @@ curl -fsS http://127.0.0.1:18766/v1/files \
 把服务器端口接到客户机
 ----------------------
 
-把服务器 127.0.0.1 上的端口，接到客户机的同一个端口。
+把服务器 127.0.0.1 上的端口接到客户机。客户机端口动态分配，避免多个会话或用户转发相同服务器端口时冲突。
 
 curl -fsS http://127.0.0.1:18766/v1/forward \
   -H "Content-Type: application/json" \
   -d "{\"port\":3000}"
 
-之后客户机访问 http://127.0.0.1:3000/ 会到达服务器的 127.0.0.1:3000。
+使用响应中的 local 地址访问；它会到达服务器的 127.0.0.1:3000。不要假定客户机端口也是 3000。
 断开 SSH 后这条转发会关闭。
 
-和 18765 的区别
----------------
+两个方向的区别
+--------------
 
-18765 反射在服务器上，用来控制客户机。
-18766 开在客户机上，用来控制服务器。
+服务器控制客户机：服务器读取 ~/.nekssh/clients/*.json，访问记录中的动态 control 地址。
+客户机控制服务器：访问客户机固定的 127.0.0.1:18766，并在多会话时指定 ?session=。
 `

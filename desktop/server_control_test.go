@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -41,6 +42,24 @@ func TestServerControlWithoutSession(t *testing.T) {
 	if response.StatusCode != http.StatusConflict {
 		text, _ := io.ReadAll(response.Body)
 		t.Fatalf("run %d %s", response.StatusCode, text)
+	}
+}
+
+func TestForwardServerPortUsesDynamicClientPort(t *testing.T) {
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer occupied.Close()
+	serverPort := occupied.Addr().(*net.TCPAddr).Port
+	session := &desktopSession{}
+	local, err := forwardServerPort(session, serverPort)
+	if err != nil {
+		t.Fatalf("dynamic forward: %v", err)
+	}
+	defer session.closeLocalForwards()
+	if local == occupied.Addr().String() {
+		t.Fatalf("client port reused occupied server port: %s", local)
 	}
 }
 

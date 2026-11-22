@@ -16,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sys/windows"
 )
 
 const neksshReflectPort = 18765
@@ -33,6 +35,57 @@ type clientJob struct {
 type limitedLog struct {
 	mu  sync.Mutex
 	buf bytes.Buffer
+}
+
+// remoteConsole is a single visible console for the client-control channel.
+// Jobs still run as independent processes so stopping one job cannot affect another.
+type remoteConsole struct {
+	mu    sync.Mutex
+	cmd   *exec.Cmd
+	stdin io.WriteCloser
+}
+
+func (c *remoteConsole) write(line string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stdin == nil {
+		return
+	}
+	_, _ = io.WriteString(c.stdin, "echo "+consoleText(line)+"\r\n")
+}
+
+func consoleText(line string) string {
+	line = strings.NewReplacer("\r", " ", "\n", " ", "^", "^^", "%", "%%", "&", "^&", "|", "^|", "<", "^<", ">", "^>", "(", "^(", ")", "^)").Replace(line)
+	return strings.TrimSpace(line)
+}
+
+func (c *remoteConsole) ensure() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cmd != nil && c.cmd.Process != nil {
+		return
+	}
+	cmd := exec.Command("cmd.exe", "/k", "title NekSSH Remote Control")
+	cmd.SysProcAttr = &windows.SysProcAttr{CreationFlags: windows.CREATE_NEW_CONSOLE}
+	stdin, err := cmd.StdinPipe()
+	if err != nil || cmd.Start() != nil {
+		return
+	}
+	c.cmd, c.stdin = cmd, stdin
+	_, _ = io.WriteString(stdin, "@echo off\r\necho NekSSH Remote Control ready\r\n")
+}
+
+func (c *remoteConsole) close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.stdin != nil {
+		_, _ = io.WriteString(c.stdin, "echo NekSSH Remote Control stopped\r\nexit\r\n")
+		_ = c.stdin.Close()
+	}
+	if c.cmd != nil && c.cmd.Process != nil {
+		_ = c.cmd.Process.Kill()
+	}
+	c.cmd, c.stdin = nil, nil
 }
 
 func (l *limitedLog) Write(p []byte) (int, error) {
@@ -67,8 +120,8 @@ func (a *App) startReflectServer() {
 }
 
 func (a *App) serveReflect(id string, session *desktopSession) {
-	finishListen := traceSSHStage(id, "remote_listen_18765")
-	listener, err := session.client.Listen("tcp", "127.0.0.1:"+strconv.Itoa(neksshReflectPort))
+	finishListen := traceSSHStage(id, "remote_listen_dynamic")
+	listener, err := session.client.Listen("tcp", "127.0.0.1:0")
 	finishListen(err)
 	if err != nil {
 		debugf("反射到服务器失败: %v", err)
@@ -77,6 +130,9 @@ func (a *App) serveReflect(id string, session *desktopSession) {
 	}
 	session.setReflectListener(listener)
 	remoteAddr := listener.Addr().String()
+	finishSkill := traceSSHStage(id, "agent_skill_setup")
+	a.installAgentSkill(session, id, remoteAddr)
+	finishSkill(nil)
 	debugf("已反射到服务器 %s", remoteAddr)
 	a.emitReflect("reflect:ready", id, remoteAddr)
 	server := &http.Server{Handler: a.reflectMux(id), ReadHeaderTimeout: 30 * time.Second}
@@ -97,12 +153,16 @@ func (a *App) reflectMux(sessionID string) http.Handler {
 
 func (a *App) reflectIndex(w http.ResponseWriter, r *http.Request) {
 	workspace, _ := reflectWorkspace()
+	controlURL := reflectControlURL(r)
+	_, portText, _ := net.SplitHostPort(strings.TrimPrefix(controlURL, "http://"))
+	controlPort, _ := strconv.Atoi(portText)
 	writeReflectJSON(w, http.StatusOK, map[string]any{
 		"service":   "nekssh",
 		"ok":        true,
-		"port":      neksshReflectPort,
+		"port":      controlPort,
+		"control":   controlURL,
 		"workspace": workspace,
-		"docs": "GET /docs",
+		"docs":      "GET /docs",
 		"usage": map[string]string{
 			"writeFiles": `POST /v1/files {"files":[{"path":"app.py","content":"print(1)"}]}`,
 			"run":        `POST /v1/run {"command":"python app.py","port":3000}`,
@@ -115,7 +175,21 @@ func (a *App) reflectIndex(w http.ResponseWriter, r *http.Request) {
 
 func reflectDocs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	io.WriteString(w, reflectDocumentation)
+	controlURL := reflectControlURL(r)
+	docs := strings.ReplaceAll(reflectDocumentation, "http://127.0.0.1:18765", controlURL)
+	docs = strings.ReplaceAll(docs, "127.0.0.1:18765", strings.TrimPrefix(controlURL, "http://"))
+	docs = strings.ReplaceAll(docs, "18765 是控制口", "该动态端口是控制口")
+	io.WriteString(w, docs)
+}
+
+func reflectControlURL(r *http.Request) string {
+	controlURL := "http://127.0.0.1:" + strconv.Itoa(neksshReflectPort)
+	if host, port, err := net.SplitHostPort(r.Host); err == nil {
+		if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+			controlURL = "http://" + net.JoinHostPort(host, port)
+		}
+	}
+	return controlURL
 }
 
 const reflectDocumentation = `NekSSH 客户机控制口
@@ -150,7 +224,7 @@ curl -fsS http://127.0.0.1:18765/v1/files \
 
 command 在 workspace 里执行。port 是程序在客户机上监听的端口。
 程序应监听 127.0.0.1，并优先读取环境变量 PORT。
-反射成功后，服务器上用同一个端口访问，地址形如 http://127.0.0.1:3000/ 。
+反射成功后，服务器端口由 SSH 动态分配，以响应中的 remote 地址为准，不要假定与客户机端口相同。
 
 curl -fsS http://127.0.0.1:18765/v1/run \
   -H "Content-Type: application/json" \
@@ -180,11 +254,11 @@ curl -fsS -X POST http://127.0.0.1:18765/v1/jobs/job-1/stop
 
 - 只使用 127.0.0.1:18765 这个控制口，不要扫描别的端口。
 - 18765 是控制口，不要拿来跑你的业务服务。
-- 业务端口同一时间只反射一次。被占用就换一个大于 1024 的端口再运行。
+- 客户机业务端口同一时间只运行一个服务；服务器侧反射端口自动分配，不会与其他用户争用固定端口。
 - 文件只写进 workspace。命令只做用户要求的那件事。
 - remote 地址只在这台服务器本机可用，不要把它写成公网地址。
 
-客户机上的 127.0.0.1:18766 用来反过来控制这台服务器：执行命令、写文件、把服务器端口接到客户机。说明见客户机的 http://127.0.0.1:18766/docs 。
+客户机上的 127.0.0.1:18766 用来反过来控制这台服务器：执行命令、写文件、把服务器端口接到客户机。说明见客户机的 http://127.0.0.1:18766/docs；客户机侧业务转发端口同样动态分配，以 local 响应为准。
 `
 
 type reflectFile struct {
@@ -264,6 +338,7 @@ func (a *App) reflectRun(sessionID string, w http.ResponseWriter, r *http.Reques
 		return
 	}
 	job := &clientJob{Command: command, Port: body.Port, log: &limitedLog{}, done: make(chan struct{})}
+	a.remoteConsole.ensure()
 	a.jobMu.Lock()
 	a.jobSeq++
 	job.ID = fmt.Sprintf("job-%d", a.jobSeq)
@@ -272,7 +347,9 @@ func (a *App) reflectRun(sessionID string, w http.ResponseWriter, r *http.Reques
 	}
 	a.jobs[job.ID] = job
 	a.jobMu.Unlock()
+	a.remoteConsole.write(fmt.Sprintf("[%s] received: %s", job.ID, command))
 	cmd := exec.Command("cmd.exe", "/c", command)
+	cmd.SysProcAttr = &windows.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
 	cmd.Dir = workspace
 	cmd.Stdout = job.log
 	cmd.Stderr = job.log
@@ -280,6 +357,7 @@ func (a *App) reflectRun(sessionID string, w http.ResponseWriter, r *http.Reques
 		cmd.Env = append(os.Environ(), "PORT="+strconv.Itoa(body.Port))
 	}
 	if err = cmd.Start(); err != nil {
+		a.remoteConsole.write(fmt.Sprintf("[%s] start failed: %v", job.ID, err))
 		writeReflectJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": err.Error()})
 		return
 	}
@@ -287,6 +365,7 @@ func (a *App) reflectRun(sessionID string, w http.ResponseWriter, r *http.Reques
 	job.PID = cmd.Process.Pid
 	go func() {
 		_ = cmd.Wait()
+		a.remoteConsole.write(fmt.Sprintf("[%s] finished", job.ID))
 		close(job.done)
 	}()
 	result := map[string]any{"ok": true, "id": job.ID, "pid": job.PID, "command": command, "workspace": workspace}
@@ -355,8 +434,11 @@ func (a *App) stopJob(job *clientJob) {
 	if job == nil || job.cmd == nil || job.cmd.Process == nil {
 		return
 	}
-	_ = exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(job.cmd.Process.Pid)).Run()
+	kill := exec.Command("taskkill", "/F", "/T", "/PID", strconv.Itoa(job.cmd.Process.Pid))
+	kill.SysProcAttr = &windows.SysProcAttr{HideWindow: true, CreationFlags: windows.CREATE_NO_WINDOW}
+	_ = kill.Run()
 	_ = job.cmd.Process.Kill()
+	a.remoteConsole.write(fmt.Sprintf("[%s] stopped", job.ID))
 }
 
 func (a *App) stopAllJobs() {
@@ -369,6 +451,7 @@ func (a *App) stopAllJobs() {
 	for _, job := range jobs {
 		a.stopJob(job)
 	}
+	a.remoteConsole.close()
 }
 
 func (a *App) reflectLocalPort(sessionID string, port int) ([]string, error) {
@@ -406,7 +489,7 @@ func (a *App) reflectLocalPort(sessionID string, port int) ([]string, error) {
 }
 
 func forwardRemotePort(session *desktopSession, port int) (string, error) {
-	listener, err := session.client.Listen("tcp", "127.0.0.1:"+strconv.Itoa(port))
+	listener, err := session.client.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return "", err
 	}

@@ -24,3 +24,9 @@ test('switching skills preserves the task and custom input removes the template'
 test('prompt normalization strips control sequences and line endings',()=>{
   assert.equal(skillInput({prompt:'a\r\nb\t\x03\x1bc'}),'a b c ');
 });
+
+test('client skills discover dynamic endpoints from the server registry',()=>{
+  const text=skillDraft('client-run','运行项目');
+  assert.match(text,/\.nekssh\/clients\/\*\.json/);
+  assert.doesNotMatch(text,/127\.0\.0\.1:18765/);
+});

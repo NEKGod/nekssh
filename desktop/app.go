@@ -49,6 +49,7 @@ type App struct {
 	jobMu            sync.Mutex
 	jobs             map[string]*clientJob
 	jobSeq           int
+	remoteConsole    remoteConsole
 }
 
 type desktopSession struct {
@@ -69,6 +70,7 @@ type desktopSession struct {
 	reflectListener net.Listener
 	reflectMore     []net.Listener
 	localForwards   []net.Listener
+	agentInfoPath   string
 }
 
 type sharedForward struct {
@@ -374,9 +376,6 @@ func (a *App) finishSessionSetup(req ConnectionRequest, entry *desktopSession) {
 	if len(notes) > 0 && a.ctx != nil {
 		runtime.EventsEmit(a.ctx, "forward:notice", req.ID, strings.Join(notes, "；"))
 	}
-	finishStage = traceSSHStage(req.ID, "agent_skill_setup")
-	a.installAgentSkill(entry)
-	finishStage(nil)
 	a.serveReflect(req.ID, entry)
 }
 
@@ -1856,6 +1855,7 @@ func (a *App) getSession(id string) (*desktopSession, error) {
 func (s *desktopSession) stop() {
 	s.close.Do(func() {
 		close(s.done)
+		s.removeAgentInfo()
 		s.closeReflect()
 		s.closeLocalForwards()
 		if s.app != nil {
